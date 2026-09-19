@@ -61,9 +61,10 @@
   // language for the banner. Technical detail always stays in the logs.
   function prettyLlmError(msg) {
     const m = String(msg || 'unknown error');
-    if (/NoBinaryFoundError/i.test(m)) {
-      return 'Could not start the local AI engine: its native component was not found or is incompatible with this install. ' +
-        'Reinstalling the app usually fixes this. Full technical details are in the logs below.';
+    if (/NoBinaryFoundError|ERR_DLOPEN_FAILED|specified module could not be found/i.test(m)) {
+      return 'Could not start the local AI engine - its native component failed to load. ' +
+        'On Windows this usually means the Microsoft Visual C++ Redistributable (x64) is missing: install it from https://aka.ms/vs/17/release/vc_redist.x64.exe, restart the app, then try again. ' +
+        'The portable build does not install it for you. Full technical details are in the logs below.';
     }
     if (/model file not found/i.test(m)) {
       return 'Model file not found. Press "Download AI model" above (one-time download), or run `npm run download-model` in dev, then try again.';
@@ -286,7 +287,7 @@
       if (s.ready) {
         setModelDlVisible(false);
         setBadge('ready', `Engine: ${s.engine} · ${(s.size / 1e6).toFixed(1)} MB`);
-        if (engineNote.textContent.startsWith('Last LLM load failed')) {
+        if (engineNote.textContent.startsWith('LLM failed to load') || engineNote.textContent.startsWith('Last LLM load failed')) {
           engineNote.textContent = '';
           engineNote.classList.remove('error');
         }
@@ -294,14 +295,15 @@
         setModelDlVisible(false);
         setBadge('loading', 'Loading LLM engine locally…');
         repollMs = 2000;
+      } else if (s.exists && s.loadError && !s.loading) {
+        setModelDlVisible(false);
+        setBadge('warn', `Engine: ${s.engine || 'LLM failed to load'}`);
+        engineNote.textContent = `LLM failed to load - nothing will translate until this is fixed. ${prettyLlmError(s.loadError)}`;
+        engineNote.classList.add('error');
+        repollMs = 10000;
       } else if (s.exists) {
         setModelDlVisible(false);
         setBadge('warn', 'LLM not loaded yet - it loads on first translation');
-        // Surface the last load failure (if any) instead of badge-shrugging.
-        if (s.loadError) {
-          engineNote.textContent = `Last LLM load failed - will retry on first translation. ${prettyLlmError(s.loadError)}`;
-          engineNote.classList.add('error');
-        }
         repollMs = 3000;
       } else {
         setBadge('warn', 'Engine: LLM unavailable - download the model below');
@@ -343,6 +345,8 @@
         barTranslate.style.width = '0%';
         translateStatus.textContent = 'Failed';
         if (res && res.raw) log('raw LLM output (truncated): ' + String(res.raw).slice(0, 800));
+        if (res && res.hint) log(res.hint);
+        if (res && res.diag) log('LLM diagnostics: ' + res.diag);
         showError((res && res.error) || 'unknown error');
         return null;
       }

@@ -277,8 +277,13 @@ async function main() {
 
   // failure diagnostics: what the load depends on, in one pasteable object
   assert.strictEqual(typeof mainMod.llamaDiagnostics, 'function');
+  assert.strictEqual(typeof mainMod.msvcRuntimeStatus, 'function');
+  assert.strictEqual(typeof mainMod.isMsvcMissingError, 'function');
+  const msvc = mainMod.msvcRuntimeStatus();
+  assert.ok(msvc && typeof msvc.present === 'boolean' && Array.isArray(msvc.missing), 'msvc status must report present/missing');
+  assert.doesNotThrow(() => mainMod.isMsvcMissingError(new Error('NoBinaryFoundError: test')), 'msvc classifier must never throw');
   const diagProbe = await mainMod.llamaDiagnostics();
-  for (const k of ['ok', 'node', 'modules', 'modelExists']) {
+  for (const k of ['ok', 'node', 'modules', 'modelExists', 'msvc']) {
     assert.ok(k in diagProbe, `diagnostics must include ${k}`);
   }
   // llamaResolved exists post-install; pre-install only the resolve error does.
@@ -301,6 +306,8 @@ async function main() {
   assert.strictEqual(failRes.ok, false, 'translate must report failure, not fallback');
   assert.ok(failRes.error && failRes.error.length > 0, 'failure must carry an error message');
   assert.ok(typeof failRes.diag === 'string' && failRes.diag.includes('modules='), 'failure must carry diag summary');
+  assert.ok(failRes.diag.includes('msvc='), 'diag summary must include the MSVC runtime state');
+  assert.ok(typeof failRes.errorKind === 'string', 'failure must classify the error kind');
   console.log('[smoke] failure diagnostics OK');
 
   // errors stay in-app: no native popups, jargon translated for humans
@@ -313,7 +320,15 @@ async function main() {
   assert.ok(renderer.includes('prettyLlmError'), 'known errors must be translated to plain language');
   assert.ok(renderer.includes('raw LLM output (truncated)'), 'failures must log the raw model output');
   assert.ok(renderer.includes('NoBinaryFoundError'), 'binary-missing must have a friendly message');
+  assert.ok(renderer.includes('Visual C++ Redistributable'), 'binary-missing must name the redistributable');
+  assert.ok(renderer.includes('portable build does not install it'), 'portable must explain the missing system step');
+  assert.ok(renderer.includes('LLM failed to load'), 'failed loads must name the failure, not promise a retry');
+  assert.ok(!renderer.includes('Last LLM load failed - will retry on first translation'), 'misleading retry line must be gone');
   assert.ok(renderer.includes('showBanner'), 'errors must surface through the themed banner');
+  // main names the same cause in logs, never the old retry promise
+  assert.ok(mainSrc.includes('Visual C++ Redistributable'), 'main logs must name the redistributable');
+  assert.ok(mainSrc.includes('msvcRuntimeStatus'), 'main must detect the runtime');
+  assert.ok(!mainSrc.includes('will retry on first translation'), 'old retry promise must be gone from main');
   console.log('[smoke] themed errors OK');
 
   // optional deps resolve (warn only)
@@ -390,10 +405,33 @@ async function main() {
   const st = mainMod.handleModelStatus();
   assert.strictEqual(typeof st.loading, 'boolean', 'status must expose loading flag');
   assert.ok('loadError' in st, 'status must expose loadError');
+  assert.ok('loadErrorKind' in st, 'status must expose the classified error kind');
+  assert.ok(st.msvc && typeof st.msvc.present === 'boolean', 'status must expose the MSVC runtime state');
   assert.strictEqual(st.ready, false, 'ready must be false before any session exists');
   assert.ok(renderer.includes('Loading LLM engine locally'), 'badge must show background loading');
-  assert.ok(renderer.includes('Last LLM load failed'), 'failed loads must explain themselves in the UI');
+  assert.ok(renderer.includes('LLM failed to load'), 'failed loads must explain themselves in the UI');
+  assert.ok(renderer.includes('nothing will translate until this is fixed'), 'failed badge must not promise a load');
+  assert.ok(mainSrc.includes("'LLM failed to load'"), 'failed engine copy must exist in main');
   assert.ok(renderer.includes('setTimeout(refreshStatus'), 'badge must poll until ready');
+  // failed engine copy: an existing model plus a recorded load error must
+  // report "failed", never "not loaded yet" (the portable-without-VC++ case).
+  {
+    const tmpModel = path.join(__dirname, 'smoke-model-exists.tmp');
+    fs.writeFileSync(tmpModel, Buffer.alloc(2048));
+    const prevModelPath = process.env.MODEL_PATH;
+    process.env.MODEL_PATH = tmpModel;
+    try {
+      const stFailed = mainMod.handleModelStatus();
+      assert.strictEqual(stFailed.exists, true, 'temp model must count as existing');
+      assert.ok(stFailed.loadError, 'previous load failure must still be recorded');
+      assert.strictEqual(stFailed.engine, 'LLM failed to load', 'failed state must not claim "not loaded yet"');
+      assert.strictEqual(stFailed.loadErrorKind, 'load-failed', 'non-MSVC failure must classify as load-failed');
+    } finally {
+      if (prevModelPath === undefined) delete process.env.MODEL_PATH;
+      else process.env.MODEL_PATH = prevModelPath;
+      fs.rmSync(tmpModel, { force: true });
+    }
+  }
   console.log('[smoke] background preload OK');
 
   // badge copy: capitalized Engine, proper-case states

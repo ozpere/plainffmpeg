@@ -255,12 +255,44 @@ async function llamaDiagnostics() {
     const llamaDir = path.join(__dirname, '..', 'node_modules', 'node-llama-cpp', 'llama');
     d.llamaDir = fs.readdirSync(llamaDir).slice(0, 25);
   } catch (e) { d.llamaDirError = String((e && e.message) || e); }
+  try { d.msvc = msvcRuntimeStatus(); } catch (e) { d.msvcError = String((e && e.message) || e); }
   d.prebuilt = await llamaPrebuiltProbe();
   return d;
 }
 
 function existsSyncSafe(p) {
   try { return fs.existsSync(p); } catch { return false; }
+}
+
+// MSVC runtime DLLs the node-llama-cpp prebuilt binary needs on Windows.
+// The NSIS installer installs them silently (assets/vc-redist.nsh); the
+// portable build cannot, so stock Windows fails with NoBinaryFoundError /
+// ERR_DLOPEN_FAILED. Detect it so the UI can name the real cause instead
+// of "not loaded yet".
+const MSVC_DLLS = ['vcruntime140.dll', 'vcruntime140_1.dll', 'msvcp140.dll'];
+const MSVC_DOWNLOAD_URL = 'https://aka.ms/vs/17/release/vc_redist.x64.exe';
+
+function msvcRuntimeStatus() {
+  if (process.platform !== 'win32') return { applicable: false, present: true, missing: [] };
+  const sysRoot = process.env.SystemRoot || 'C:\\Windows';
+  const sys32 = path.join(sysRoot, 'System32');
+  const missing = MSVC_DLLS.filter((dll) => !existsSyncSafe(path.join(sys32, dll)));
+  return { applicable: true, present: missing.length === 0, missing };
+}
+
+function msvcMissingHint() {
+  const m = msvcRuntimeStatus();
+  const missing = (m.missing && m.missing.length > 0) ? m.missing.join(', ') : 'MSVC runtime DLLs';
+  return `Missing system component (${missing}) - install "Microsoft Visual C++ Redistributable (x64)" from ${MSVC_DOWNLOAD_URL}, then restart the app. The portable build does not install it for you.`;
+}
+
+// True when a load error looks like the missing-MSVC case: native binding
+// not found / failed to load AND the redist DLLs are absent. Never throws.
+function isMsvcMissingError(err) {
+  if (process.platform !== 'win32') return false;
+  const m = String((err && err.message) || err || '');
+  if (!/NoBinaryFoundError|ERR_DLOPEN_FAILED|DLOPEN.*failed|specified module could not be found|vcruntime|msvcp140/i.test(m)) return false;
+  try { return !msvcRuntimeStatus().present; } catch { return false; }
 }
 
 // Replicates the loader's own lookup step by step: dynamic-import the
@@ -306,8 +338,13 @@ async function llamaDiagSummary() {
   try {
     const d = await llamaDiagnostics();
     const bins = Array.isArray(d.binsPkgs) ? d.binsPkgs.join(',') : 'none';
+    let msvcBit = ' msvc=n/a';
+    try {
+      const m = d.msvc;
+      if (m && m.applicable) msvcBit = ` msvc=${m.present ? 'ok' : 'missing:' + (m.missing || []).join(',')}`;
+    } catch { /* keep n/a */ }
     return `node=${d.node || '?'} modules=${d.modules || '?'} electron=${d.electron || 'n/a'} ` +
-      `model=${d.modelExists ? d.modelSize + 'B' : 'missing'} bins=[${bins}]`;
+      `model=${d.modelExists ? d.modelSize + 'B' : 'missing'} bins=[${bins}]${msvcBit}`;
   } catch { return 'diagnostics unavailable'; }
 }
 
@@ -431,7 +468,14 @@ function preloadLlm() {
     (err) => {
       const message = err && err.message ? err.message : String(err);
       console.error('[main] background LLM preload failed:', message);
-      notifyRenderer(`LLM background load failed: ${message} - will retry on first translation.`);
+      if (isMsvcMissingError(err)) {
+        const hint = msvcMissingHint();
+        console.error('[main] ' + hint);
+        notifyRenderer(`LLM background load failed: ${message}.`);
+        notifyRenderer(hint + ' See logs below for details.');
+      } else {
+        notifyRenderer(`LLM background load failed: ${message} - will retry on next translation. See logs below for details.`);
+      }
     }
   );
 }
@@ -729,10 +773,15 @@ function handleModelStatus() {
   } catch { llamaAvailable = false; }
   const loading = isLlamaLoading();
   const ready = exists && llamaAvailable && llamaSession !== null;
+  let msvc = null;
+  try { msvc = msvcRuntimeStatus(); } catch { msvc = null; }
+  const failed = exists && llamaSession === null && llamaLoadError && !loading;
+  const msvcMissing = !!(failed && isMsvcMissingError(llamaLoadError));
   let engine;
   if (ready) engine = 'node-llama-cpp (local GGUF)';
   else if (!exists) engine = 'LLM unavailable';
   else if (loading) engine = 'Loading LLM engine locally…';
+  else if (failed) engine = 'LLM failed to load';
   else engine = 'LLM not loaded';
   return {
     modelPath,
@@ -741,6 +790,8 @@ function handleModelStatus() {
     llamaAvailable,
     loading,
     loadError: llamaLoadError,
+    loadErrorKind: !failed ? null : (msvcMissing ? 'msvc-missing' : 'load-failed'),
+    msvc,
     ffmpegPath: ffmpegPath || null,
     engine,
     ready,
@@ -808,11 +859,25 @@ async function handleTranslatePrompt({ instruction, inputFile, duration }) {
       notifyRenderer('LLM diagnostics: ' + JSON.stringify(await llamaDiagnostics()));
       diag = await llamaDiagSummary();
     } catch { /* diagnostics must never break error reporting */ }
+    if (isMsvcMissingError(err)) {
+      const hint = msvcMissingHint();
+      console.error('[main] ' + hint);
+      try { notifyRenderer(hint + ' See logs below for details.'); } catch { /* window closed */ }
+      return {
+        ok: false,
+        engine: 'node-llama-cpp',
+        error: message,
+        diag,
+        errorKind: 'msvc-missing',
+        hint,
+      };
+    }
     return {
       ok: false,
       engine: 'node-llama-cpp',
       error: message,
       diag,
+      errorKind: 'load-failed',
     };
   }
 }
@@ -1344,6 +1409,12 @@ module.exports = {
   handleSaveDroppedFile,
   handleOpenPath,
   llamaDiagnostics,
+  llamaDiagSummary,
+  msvcRuntimeStatus,
+  isMsvcMissingError,
+  msvcMissingHint,
+  MSVC_DLLS,
+  MSVC_DOWNLOAD_URL,
   ffmpegFailureHint,
   handleWindowMin,
   handleWindowMax,
