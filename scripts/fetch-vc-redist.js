@@ -19,6 +19,27 @@ const SOURCE = 'https://aka.ms/vs/17/release/vc_redist.x64.exe';
 // Real file is ~25 MB - anything far smaller is a truncated download.
 const MIN_BYTES = 10 * 1024 * 1024;
 
+// Plausibility gate for an executable that will later run elevated: right
+// size and an MZ header. Catches HTML error pages and wrong-arch files
+// before they are bundled into the installer.
+function assertPlausibleExe(filePath) {
+  let head = Buffer.alloc(0);
+  try {
+    const fd = fs.openSync(filePath, 'r');
+    try {
+      head = Buffer.alloc(2);
+      fs.readSync(fd, head, 0, 2, 0);
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch { /* unreadable counts as mismatch below */ }
+  const size = (() => { try { return fs.statSync(filePath).size; } catch { return 0; } })();
+  const hasMZ = head.length === 2 && head[0] === 0x4d && head[1] === 0x5a;
+  if (size < MIN_BYTES || !hasMZ) {
+    throw new Error(`implausible redist executable (${size} bytes, MZ header ${hasMZ ? 'ok' : 'missing'}).`);
+  }
+}
+
 async function main() {
   try {
     const st = fs.statSync(DEST);
@@ -48,6 +69,7 @@ async function main() {
     try { fs.rmSync(tmp, { force: true }); } catch { /* ignore */ }
     throw new Error(`downloaded file smaller than expected (${done} bytes).`);
   }
+  assertPlausibleExe(tmp);
   fs.renameSync(tmp, DEST);
   console.log(`[fetch-vc-redist] saved ${DEST} (${(done / 1e6).toFixed(1)} MB)`);
 }
@@ -58,4 +80,4 @@ if (require.main === module) {
     process.exit(1);
   });
 }
-module.exports = { DEST, SOURCE };
+module.exports = { DEST, SOURCE, MIN_BYTES, assertPlausibleExe };

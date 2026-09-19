@@ -31,7 +31,7 @@ function exists(p) {
   }
 }
 
-async function downloadTo(url, dest, { onProgress, _retried } = {}) {
+async function downloadTo(url, dest, { onProgress, expectMagic, _retried } = {}) {
   console.log(`[download-model] fetching ${url}`);
   const tmp = dest + '.part';
   const sidecar = dest + '.source';
@@ -59,7 +59,7 @@ async function downloadTo(url, dest, { onProgress, _retried } = {}) {
   if (res.status === 416) {
     // Range unsatisfiable (remote file changed) - restart from zero.
     try { fs.rmSync(tmp, { force: true }); } catch { /* ignore */ }
-    return downloadTo(url, dest, { onProgress });
+    return downloadTo(url, dest, { onProgress, expectMagic });
   }
   if (res.status !== 200 && res.status !== 206) {
     throw new Error(`HTTP ${res.status} ${res.statusText} for ${url}`);
@@ -73,7 +73,7 @@ async function downloadTo(url, dest, { onProgress, _retried } = {}) {
       console.log(`[download-model] server resumed at ${m[1]} instead of ${start} - restarting.`);
       try { if (res.body && res.body.cancel) await res.body.cancel(); } catch { /* ignore */ }
       try { fs.rmSync(tmp, { force: true }); } catch { /* ignore */ }
-      return downloadTo(url, dest, { onProgress, _retried: true });
+      return downloadTo(url, dest, { onProgress, expectMagic, _retried: true });
     }
   }
   if (!resume && start > 0) {
@@ -112,7 +112,25 @@ async function downloadTo(url, dest, { onProgress, _retried } = {}) {
   if (total > 0 && done !== total) {
     throw new Error(`incomplete download (${done} of ${total} bytes) - try again to resume.`);
   }
-  if (streamErr) throw streamErr;
+  if (expectMagic) {
+    // Cheap format gate: a GGUF model starts with "GGUF". An HTML error page
+    // or wrong file fails here instead of confusing the LLM loader later.
+    const magic = Buffer.from(String(expectMagic));
+    let head = Buffer.alloc(0);
+    try {
+      const fd = fs.openSync(tmp, 'r');
+      try {
+        head = Buffer.alloc(magic.length);
+        fs.readSync(fd, head, 0, magic.length, 0);
+      } finally {
+        fs.closeSync(fd);
+      }
+    } catch { /* unreadable counts as mismatch below */ }
+    if (!head.equals(magic)) {
+      try { fs.rmSync(tmp, { force: true }); } catch { /* ignore */ }
+      throw new Error(`downloaded file failed format check (no "${expectMagic}" header) - removed.`);
+    }
+  }
   fs.renameSync(tmp, dest);
   try { fs.rmSync(sidecar, { force: true }); } catch { /* ignore */ }
   console.log(`[download-model] saved ${dest} (${(done / 1e6).toFixed(1)} MB)`);
@@ -140,7 +158,7 @@ async function main() {
   let lastErr = null;
   for (const url of SOURCES) {
     try {
-      const { bytes } = await downloadTo(url, TARGET);
+      const { bytes } = await downloadTo(url, TARGET, { expectMagic: 'GGUF' });
       if (bytes < MIN_BYTES) {
         // Undersized means truncated/corrupt - remove it so it is never
         // mistaken for a present model, then try the next source.

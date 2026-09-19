@@ -175,7 +175,7 @@ async function handleDownloadModel(event, payload) {
     for (const url of downloader.SOURCES) {
       try {
         emit({ state: 'downloading', url, done: 0, total: 0, pct: null });
-        const { bytes } = await downloader.downloadTo(url, dest, { onProgress });
+        const { bytes } = await downloader.downloadTo(url, dest, { onProgress, expectMagic: 'GGUF' });
         if (bytes < (downloader.MIN_BYTES || 0)) {
           throw new Error(`downloaded file smaller than expected (${bytes} bytes).`);
         }

@@ -790,6 +790,73 @@ async function main() {
     }
     console.log('[smoke] resume integrity OK');
   }
+  // format gates: wrong bytes must never stage as model or installer payload.
+  {
+    const http = require('http');
+    const dl = require('../scripts/download-model.js');
+    const vc = require('../scripts/fetch-vc-redist.js');
+    // 1. Model without a GGUF header is rejected and removed.
+    {
+      const srv = http.createServer((req, res) => {
+        const body = Buffer.from('<html>error page, not a model</html>');
+        res.writeHead(200, { 'Content-Length': body.length });
+        res.end(body);
+      });
+      await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+      const dest = path.join(__dirname, 'smoke-model-magic.tmp');
+      try {
+        await assert.rejects(
+          dl.downloadTo(`http://127.0.0.1:${srv.address().port}/model.gguf`, dest, { expectMagic: 'GGUF' }),
+          /format check/,
+          'non-GGUF bytes must be rejected'
+        );
+        assert.strictEqual(fs.existsSync(dest), false, 'bad magic must not stage');
+        assert.strictEqual(fs.existsSync(dest + '.part'), false, 'bad magic partial must be removed');
+      } finally {
+        fs.rmSync(dest, { force: true });
+        fs.rmSync(dest + '.part', { force: true });
+        fs.rmSync(dest + '.source', { force: true });
+        srv.close();
+      }
+    }
+    // 2. GGUF header passes the same gate.
+    {
+      const body = Buffer.concat([Buffer.from('GGUF'), Buffer.alloc(1024, 0x07)]);
+      const srv = http.createServer((req, res) => {
+        res.writeHead(200, { 'Content-Length': body.length });
+        res.end(body);
+      });
+      await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+      const dest = path.join(__dirname, 'smoke-model-magic-ok.tmp');
+      try {
+        await dl.downloadTo(`http://127.0.0.1:${srv.address().port}/model.gguf`, dest, { expectMagic: 'GGUF' });
+        assert.deepStrictEqual(fs.readFileSync(dest).slice(0, 4), Buffer.from('GGUF'), 'GGUF bytes must stage');
+      } finally {
+        fs.rmSync(dest, { force: true });
+        fs.rmSync(dest + '.part', { force: true });
+        fs.rmSync(dest + '.source', { force: true });
+        srv.close();
+      }
+    }
+    // 3. Redist plausibility: MZ header and size, or throw.
+    {
+      assert.strictEqual(typeof vc.assertPlausibleExe, 'function');
+      const bad = path.join(__dirname, 'smoke-vc-bad.tmp');
+      const good = path.join(__dirname, 'smoke-vc-good.tmp');
+      try {
+        fs.writeFileSync(bad, '<html>not an exe</html>');
+        assert.throws(() => vc.assertPlausibleExe(bad), /implausible/, 'HTML must not pass as an exe');
+        const big = Buffer.alloc(10 * 1024 * 1024 + 16, 0);
+        big[0] = 0x4d; big[1] = 0x5a;
+        fs.writeFileSync(good, big);
+        assert.doesNotThrow(() => vc.assertPlausibleExe(good), 'sized MZ file must pass');
+      } finally {
+        fs.rmSync(bad, { force: true });
+        fs.rmSync(good, { force: true });
+      }
+    }
+    console.log('[smoke] format gates OK');
+  }
   // offline installs must warn and continue: the app works model-less.
   {
     const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
