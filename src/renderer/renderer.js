@@ -336,7 +336,7 @@
 
   // Polls until the background LLM load finishes: the badge goes
   // unavailable → loading (red) → ready (green) without blocking the UI.
-  // With no model on disk the download card shows instead of dev-only advice.
+  // With no model on disk the download card shows.
   // The resolved model path is logged once so "where is my 1.3 GB" is answerable.
   let statusLogged = false;
   // Single status loop: every schedule cancels the pending poll first, so

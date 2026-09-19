@@ -38,7 +38,6 @@ function resolveModelPath() {
     'model.gguf',
     'Qwen_Qwen3-1.7B-Q4_K_M.gguf',
     'Qwen3-1.7B-Q4_K_M.gguf',
-    // Previous generation - keep working for users who already downloaded it.
     'Qwen2.5-Coder-1.5B-Instruct-Q4_K_M.gguf',
   ];
   const dirs = [];

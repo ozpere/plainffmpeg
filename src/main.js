@@ -93,10 +93,6 @@ try {
   ffmpegPath = null;
 }
 
-// Note: fluent-ffmpeg was removed - the runner spawns the ffmpeg-static
-// binary directly (arbitrary LLM flags run verbatim), so the 2017 wrapper
-// bought nothing but a dependency.
-
 // ---------------------------------------------------------------------------
 // Paths and model locations (see paths.js)
 // ---------------------------------------------------------------------------

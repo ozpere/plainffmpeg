@@ -134,7 +134,7 @@ async function main() {
   console.log('[smoke] fixupArgs OK');
 
   // input fixup: a literal "-i input.mp4" (or any missing file) must be
-  // replaced with the loaded video - this was the real Windows failure.
+  // replaced with the loaded video.
   assert.strictEqual(typeof mainMod.fixupInput, 'function');
   let fi = mainMod.fixupInput(['-i', 'input.mp4', 'out.mkv'], 'C:\\vids\\clip.mp4');
   assert.deepStrictEqual(fi.args, ['-i', 'C:\\vids\\clip.mp4', 'out.mkv']);
@@ -347,10 +347,10 @@ async function main() {
   assert.ok(renderer.includes('LLM failed to load'), 'failed loads must name the failure, not promise a retry');
   assert.ok(!renderer.includes('Last LLM load failed - will retry on first translation'), 'misleading retry line must be gone');
   assert.ok(renderer.includes('showBanner'), 'errors must surface through the themed banner');
-  // main names the same cause in logs, never the old retry promise
+  // main names the same cause in logs and in the banner
   assert.ok(pathsSrc.includes('Visual C++ Redistributable'), 'MSVC hint must name the redistributable');
   assert.ok(mainSrc.includes('msvcRuntimeStatus'), 'main must detect the runtime');
-  assert.ok(!mainSrc.includes('will retry on first translation'), 'old retry promise must be gone from main');
+  assert.ok(!mainSrc.includes('will retry on first translation'), 'retry promise must stay out of main');
   console.log('[smoke] themed errors OK');
 
   // optional deps resolve (warn only)
@@ -935,7 +935,7 @@ async function main() {
   // terminal starts empty (nothing is ready before the LLM is)
   const termMatch = /<pre id="terminal"[^>]*>([\s\S]*?)<\/pre>/.exec(html);
   assert.ok(termMatch && termMatch[1].trim() === '', 'terminal must not start with "ready"');
-  // engineNote success line removed (corrections note stays)
+  // no plain success line on engineNote (corrections note stays)
   assert.ok(!renderer.includes("engineNote.textContent = 'Translated locally"),
     'plain "Translated locally" line must be gone');
   assert.ok(renderer.includes('auto-correction(s) applied'), 'corrections note stays');
