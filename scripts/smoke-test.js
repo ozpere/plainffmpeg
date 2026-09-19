@@ -652,6 +652,7 @@ async function main() {
   // redist failures must warn, never pass silently: only 0/1638/3010 are success.
   assert.ok(nsh.includes('1638') && nsh.includes('3010'), 'installer must allowlist the benign redist exit codes');
   assert.ok(nsh.includes('MessageBox'), 'redist failure must warn instead of going green');
+  assert.ok(nsh.includes('1223'), 'declined admin prompt must get its own guidance');
   // install helper must survive locked dirs and check the full CRT set.
   const installWin = fs.readFileSync(path.join(__dirname, 'install-windows.js'), 'utf8');
   assert.ok(installWin.includes('could not remove node_modules'), '--clean must report locked dirs instead of crashing');

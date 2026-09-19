@@ -12,7 +12,15 @@
   StrCmp $0 0 plainffmpegVcRedistDone
   StrCmp $0 1638 plainffmpegVcRedistDone
   StrCmp $0 3010 plainffmpegVcRedistDone
+  ; The per-user installer cannot elevate itself: only this bundled runtime
+  ; needs admin rights. A declined prompt (1223 cancelled, 5 denied) installs
+  ; the app fine but leaves translation broken - say exactly that.
+  StrCmp $0 1223 plainffmpegVcRedistDenied
+  StrCmp $0 5 plainffmpegVcRedistDenied
   MessageBox MB_OK|MB_ICONEXCLAMATION "PlainFFmpeg installed, but the Microsoft Visual C++ Redistributable (x64) failed to install (exit code $0). Translation needs it: install it from https://aka.ms/vs/17/release/vc_redist.x64.exe, then restart the app."
+  Goto plainffmpegVcRedistDone
+  plainffmpegVcRedistDenied:
+  MessageBox MB_OK|MB_ICONEXCLAMATION "PlainFFmpeg installed, but the admin prompt for the Microsoft Visual C++ Redistributable (x64) was declined, so translation will not work yet. Install it from https://aka.ms/vs/17/release/vc_redist.x64.exe (needs admin once), then restart the app."
   plainffmpegVcRedistDone:
 !macroend
 
