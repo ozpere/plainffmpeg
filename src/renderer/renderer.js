@@ -166,6 +166,7 @@
     engineBadge.classList.toggle('ready', state === 'ready');
     engineBadge.classList.toggle('loading', state === 'loading');
     engineBadge.classList.toggle('warn', state === 'warn');
+    engineBadge.classList.toggle('error', state === 'error');
   }
 
   // In-app confirm with dynamic copy (overwrite prompt, storage consent).
@@ -297,7 +298,7 @@
         repollMs = 2000;
       } else if (s.exists && s.loadError && !s.loading) {
         setModelDlVisible(false);
-        setBadge('warn', `Engine: ${s.engine || 'LLM failed to load'}`);
+        setBadge('error', `Engine: ${s.engine || 'LLM failed to load'}`);
         engineNote.textContent = `LLM failed to load - nothing will translate until this is fixed. ${prettyLlmError(s.loadError)}`;
         engineNote.classList.add('error');
         repollMs = 10000;

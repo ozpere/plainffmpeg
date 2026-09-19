@@ -81,6 +81,10 @@ body {
   background: #3a2320; color: #f2b8b0;
   border-color: #7a443c;
 }
+.badge.error {
+  background: #3a2320; color: #f2b8b0;
+  border-color: #7a443c;
+}
 .badge.ready {
   background: #22301f; color: #bfe3b8;
   border-color: #4a6b45;

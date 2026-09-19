@@ -411,6 +411,7 @@ async function main() {
   assert.ok(renderer.includes('Loading LLM engine locally'), 'badge must show background loading');
   assert.ok(renderer.includes('LLM failed to load'), 'failed loads must explain themselves in the UI');
   assert.ok(renderer.includes('nothing will translate until this is fixed'), 'failed badge must not promise a load');
+  assert.ok(renderer.includes("setBadge('error'"), 'failed badge must use the red error state');
   assert.ok(mainSrc.includes("'LLM failed to load'"), 'failed engine copy must exist in main');
   assert.ok(renderer.includes('setTimeout(refreshStatus'), 'badge must poll until ready');
   // failed engine copy: an existing model plus a recorded load error must
@@ -630,6 +631,7 @@ async function main() {
   assert.ok(css.includes('position: sticky'), 'title bar must stay frozen while scrolling');
   assert.ok(/\.badge\.loading\s*{[^}]*#f2b8b0/i.test(css), 'loading badge must be pastel red');
   assert.ok(/\.badge\.ready\s*{[^}]*#bfe3b8/i.test(css), 'ready badge must be pastel green');
+  assert.ok(/\.badge\.error\s*{[^}]*#f2b8b0/i.test(css), 'error badge must be pastel red');
   assert.ok(css.includes('.overlay') && css.includes('.modal'), 'modal styles must exist');
   assert.ok(html.includes('We ask before overwriting an existing file.'), 'hint must promise the ask');
   // terminal starts empty (nothing is ready before the LLM is)
