@@ -51,6 +51,12 @@
 
   function log(line) {
     terminal.textContent += line + '\n';
+    // Long ffmpeg streams would otherwise bloat the DOM and freeze the page.
+    const over = terminal.textContent.length - 200000;
+    if (over > 0) {
+      const cut = terminal.textContent.indexOf('\n', over);
+      terminal.textContent = terminal.textContent.slice(cut === -1 ? over : cut + 1);
+    }
     terminal.scrollTop = terminal.scrollHeight;
   }
 
@@ -173,8 +179,16 @@
   }
 
   // In-app confirm with dynamic copy (overwrite prompt, storage consent).
-  // Resolves true on action, false on Cancel / Esc / backdrop click.
-  function confirmDialog({ title, message, okLabel }) {
+  // Calls serialize through a queue: overlapping prompts show one after
+  // another instead of clobbering each other's copy and listeners.
+  let confirmQueue = Promise.resolve();
+  function confirmDialog(opts) {
+    const task = confirmQueue.then(() => showConfirmDialog(opts));
+    confirmQueue = task.then(() => undefined, () => undefined);
+    return task;
+  }
+  function showConfirmDialog({ title, message, okLabel }) {
+    // Resolves true on action, false on Cancel / Esc / backdrop click.
     return new Promise((resolve) => {
       confirmTitle.textContent = title;
       confirmMsg.textContent = message;
@@ -292,6 +306,13 @@
   // With no model on disk the download card shows instead of dev-only advice.
   // The resolved model path is logged once so "where is my 1.3 GB" is answerable.
   let statusLogged = false;
+  // Single status loop: every schedule cancels the pending poll first, so
+  // the download-complete nudge cannot fork a second chain.
+  let statusTimer = null;
+  function scheduleRefresh(ms) {
+    if (statusTimer) clearTimeout(statusTimer);
+    statusTimer = setTimeout(refreshStatus, ms);
+  }
   function setModelDlVisible(v) {
     if (modelDl) modelDl.hidden = !v;
   }
@@ -352,7 +373,7 @@
       setBadge('warn', 'Engine: unknown');
       repollMs = 5000;
     }
-    if (repollMs > 0) setTimeout(refreshStatus, repollMs);
+    if (repollMs > 0) scheduleRefresh(repollMs);
   }
 
   async function translate() {
@@ -375,6 +396,7 @@
     clearError();
     translateBtn.disabled = true;
     translateOnlyBtn.disabled = true;
+    runBtn.disabled = true;
     barTranslate.classList.add('indeterminate');
     barTranslate.style.width = '100%';
     translateStatus.textContent = 'Translating…';
@@ -423,6 +445,7 @@
     } finally {
       translateBtn.disabled = false;
       translateOnlyBtn.disabled = false;
+      runBtn.disabled = !lastArgs;
     }
   }
 
@@ -629,23 +652,31 @@
   });
 
   browseBtn.addEventListener('click', async () => {
-    const p = await window.api.pickFile();
-    if (p) setFile(p);
+    try {
+      const p = await window.api.pickFile();
+      if (p) setFile(p);
+    } catch (e) {
+      showBanner('Could not open the file dialog: ' + (e && e.message ? e.message : e));
+    }
   });
 
   chooseOutputBtn.addEventListener('click', async () => {
     const current = effectiveOutput() || defaultOutput();
     const ext = translatedExt().replace(/^\./, '');
-    const p = await window.api.pickOutput({ defaultPath: current || undefined, extension: ext || undefined });
-    if (p) {
-      outputFile = p;
-      outputManual = true;
-      refreshOutputDisplay();
-      if (outputPath.value !== p) {
-        log(`output set to: ${outputPath.value} (extension follows the translated command)`);
-      } else {
-        log(`output set to: ${p}`);
+    try {
+      const p = await window.api.pickOutput({ defaultPath: current || undefined, extension: ext || undefined });
+      if (p) {
+        outputFile = p;
+        outputManual = true;
+        refreshOutputDisplay();
+        if (outputPath.value !== p) {
+          log(`output set to: ${outputPath.value} (extension follows the translated command)`);
+        } else {
+          log(`output set to: ${p}`);
+        }
       }
+    } catch (e) {
+      showBanner('Could not open the save dialog: ' + (e && e.message ? e.message : e));
     }
   });
 
@@ -696,7 +727,7 @@
     barModel.style.width = '100%';
     modelDlStatus.textContent = 'Download complete - engine starting…';
     log('model download complete, engine starting…');
-    setTimeout(refreshStatus, 1500);
+    scheduleRefresh(1500);
   }
   window.api.onModelDownload((p) => {
     if (!p) return;
@@ -761,7 +792,7 @@
     if (p.done) {
       barFfmpeg.style.width = '100%';
       if (ffmpegStatus.textContent === 'Running…') {
-        ffmpegStatus.textContent = p.code === 0 ? 'Done' : `Failed (code ${p.code})`;
+        ffmpegStatus.textContent = p.code === 0 ? 'Done' : (typeof p.code === 'number' ? `Failed (code ${p.code})` : 'Failed');
       }
     } else if (typeof p.pct === 'number') {
       const pct = Math.max(0, Math.min(100, p.pct));

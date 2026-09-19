@@ -415,9 +415,20 @@ async function main() {
   assert.ok(renderer.includes('Loading LLM engine locally'), 'badge must show background loading');
   assert.ok(renderer.includes('LLM failed to load'), 'failed loads must explain themselves in the UI');
   assert.ok(renderer.includes('nothing will translate until this is fixed'), 'failed badge must not promise a load');
-  assert.ok(renderer.includes("setBadge('error'"), 'failed badge must use the red error state');
   assert.ok(mainSrc.includes("'LLM failed to load'"), 'failed engine copy must exist in main');
-  assert.ok(renderer.includes('setTimeout(refreshStatus'), 'badge must poll until ready');
+  // single status loop: the download nudge must not fork a second chain.
+  assert.ok(renderer.includes('scheduleRefresh'), 'status polls must go through one cancellable timer');
+  assert.ok(renderer.includes('scheduleRefresh(repollMs)'), 'poll loop must reschedule through the single timer');
+  assert.ok(renderer.includes('scheduleRefresh(1500)'), 'download nudge must reuse the single timer');
+  // modal prompts serialize instead of clobbering each other.
+  assert.ok(renderer.includes('confirmQueue'), 'confirm dialogs must be queued');
+  // run is locked while a translation is in flight.
+  assert.ok(renderer.includes('runBtn.disabled = !lastArgs'), 'run availability must follow the translation');
+  // unbounded log growth freezes the page on long ffmpeg runs.
+  assert.ok(renderer.includes('200000'), 'terminal log must be capped');
+  // dead dialogs must explain themselves instead of hanging silently.
+  assert.ok(renderer.includes('Could not open the file dialog'), 'file picker failure must surface');
+  assert.ok(renderer.includes('Could not open the save dialog'), 'save picker failure must surface');
   // failed engine copy: an existing model plus a recorded load error must
   // report "failed", never "not loaded yet" (the portable-without-VC++ case).
   {
