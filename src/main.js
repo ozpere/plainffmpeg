@@ -55,6 +55,7 @@ let app = null;
 let BrowserWindow = null;
 let ipcMain = null;
 let dialog = null;
+let shell = null;
 let Menu = null;
 let isElectron = false;
 try {
@@ -63,6 +64,7 @@ try {
   BrowserWindow = electron.BrowserWindow;
   ipcMain = electron.ipcMain;
   dialog = electron.dialog;
+  shell = electron.shell;
   Menu = electron.Menu;
   isElectron = !!(app && typeof app.whenReady === 'function' && process.versions && process.versions.electron);
 } catch { /* plain Node (smoke tests): helpers below still work */ }
@@ -76,7 +78,6 @@ try {
   if (base && isElectron && app && typeof app.setPath === 'function') {
     app.setPath('userData', path.join(base, 'user-data'));
     try { app.setPath('sessionData', path.join(base, 'user-data')); } catch { /* older Electron */ }
-    try { app.setPath('cache', path.join(base, 'cache')); } catch { /* name unsupported */ }
   }
 } catch { /* keep Electron defaults */ }
 
@@ -298,12 +299,12 @@ function handleModelStatus() {
     llamaAvailable = true;
   } catch { llamaAvailable = false; }
   const loading = isLlamaLoading();
-  const session = hasLlamaSession();
+  const hasSession = hasLlamaSession();
   const loadError = getLlamaLoadError();
-  const ready = exists && llamaAvailable && session;
+  const ready = exists && llamaAvailable && hasSession;
   let msvc = null;
   try { msvc = msvcRuntimeStatus(); } catch { msvc = null; }
-  const failed = exists && !session && loadError && !loading;
+  const failed = exists && !hasSession && loadError && !loading;
   const msvcMissing = !!(failed && isMsvcMissingError(loadError));
   let engine;
   if (ready) engine = 'node-llama-cpp (local GGUF)';
@@ -474,10 +475,6 @@ async function handleOpenPath({ dirPath } = {}) {
   let isDir = false;
   try { isDir = fs.statSync(dir).isDirectory(); } catch { isDir = false; }
   if (!isDir) throw new Error(`Folder not found: ${dir}`);
-  let shell = null;
-  try {
-    ({ shell } = require('electron'));
-  } catch { /* not running inside Electron */ }
   if (!shell || typeof shell.openPath !== 'function') {
     throw new Error('OS file manager unavailable in this context.');
   }
@@ -633,6 +630,9 @@ if (isElectron && ipcMain) {
 }
 
 module.exports = {
+  // Module contract: orchestration above plus the split modules' members.
+  // userDataModelsDir, MSVC_DLLS, MSVC_DOWNLOAD_URL, defaultOutputPath and
+  // SYSTEM_PROMPT are imported solely for re-export (see header comment).
   sanitizeModelOutput,
   tokenizeArgs,
   fixupArgs,
