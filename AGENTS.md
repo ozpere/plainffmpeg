@@ -8,7 +8,7 @@ Self-contained offline Electron video editor. Plain English instruction is trans
 - `node-llama-cpp` v3 is pure ESM. Main process is CJS, so load it only via `await import('node-llama-cpp')`. Never `require('node-llama-cpp')` (throws ERR_REQUIRE_ESM).
 - `ffmpeg-static` + `fluent-ffmpeg` (spawned directly so arbitrary LLM flags run verbatim)
 - Vanilla JS renderer, no framework. `src/preload.js` is the only IPC bridge (contextIsolation, no nodeIntegration).
-- Model lives at `models/model.gguf` (~1.3 GB, gitignored). Never commit `*.gguf`.
+- Model lives at `models/model.gguf` in dev (~1.3 GB, gitignored). Never commit `*.gguf`.
 
 ## Commands
 
@@ -20,6 +20,7 @@ Self-contained offline Electron video editor. Plain English instruction is trans
 | `npm run download-model` | (Re)download GGUF from Hugging Face (resumable) |
 | `npm run fetch-vc-redist` | Fetch MSVC redist into `assets/` for the Windows installer |
 | `npm run dist:win` | Build Windows NSIS installer + portable exe (`dist/`) |
+| `npm run dist:linux` | Build Linux AppImage (`dist/`) |
 | `npm run install:win` | Windows-safe install: CPU-only binaries, long-paths, MSVC check |
 
 Run `npm test` plus `npm run test:headless` after every change. Smoke test is the contract: helpers, prompt content, IPC surface, branding, CSS theme, and UX copy.
@@ -34,7 +35,7 @@ src/renderer/index.html  UI structure, frameless titlebar, split progress bars, 
 src/renderer/styles.css  Warm-charcoal theme, no gradients
 scripts/download-model.js GGUF fetcher, resumable (TARGET is models/model.gguf, shared by main via downloadTo)
 scripts/fetch-vc-redist.js MSVC redist fetcher for the installer (not committed)
-assets/vc-redist.nsh     NSIS hooks: silent MSVC redist install (`customInstall`, needs vc_redist.x64.exe beside it at build) and model-data cleanup on uninstall (`customUnInstall` removes `%APPDATA%\PlainFFmpeg`)
+assets/vc-redist.nsh     NSIS hooks: silent MSVC redist install (`customInstall`, needs vc_redist.x64.exe beside it at build) and uninstall cleanup (`customUnInstall` removes `%APPDATA%\PlainFFmpeg` and the staged copy `%LOCALAPPDATA%\plainffmpeg-updater`)
 .github/workflows/release.yml Windows CI: install, checks, dist:win, dist:linux, upload exes
 scripts/install-windows.js CPU-only install helper
 scripts/smoke-test.js    Headless contract, asserts behavior not just syntax
@@ -50,7 +51,7 @@ Order is fixed in `handleTranslatePrompt`:
 3. `fixupArgs` - rewrite invalid sizes: `-s 360p` and `scale=720p` become `scale=-2:H`. Merge into existing `-vf`; merge duplicate `-vf` chains (ffmpeg keeps only the last one).
 4. `fixupInput` - replace placeholder/missing `-i` (e.g. `input.mp4`) with the loaded video path. Existing real file is untouched.
 5. `fixupConflicts` - strip `-pass`/`-passlogfile` (single-shot runner), drop audio flags under `-an`, fix `-c:v copy` + video filters via container-aware codec. Needs instruction words, not the output token.
-6. `ensureOutputFile` - append `output.<ext>` if missing. Ext comes from instruction words, else codec hints, else `.mp4`. Runs BEFORE trim/size so their insertions slot before a real trailing output (never split a flag/value pair).
+6. `ensureOutputFile` - drop trailing valued flags left by truncation (else the output is swallowed as a flag value), then append `output.<ext>` if missing. Ext comes from instruction words, else codec hints, else `.mp4`. Runs BEFORE trim/size so their insertions slot before a real trailing output (never split a flag/value pair).
 7. `fixupLastTrim` - needs `duration`. "trim/cut/remove the last N" keeps `[0, D-N]` via `-t`. "keep/extract only the last N" keeps tail via `-ss D-N`, no `-t`.
 8. `fixupSizeLimit` - "below 2GB / under 500MB" enforces single-pass capped bitrate `-b:v Xk -maxrate Xk -bufsize 2Xk`, audio bounded to `-c:a aac -b:a 128k` (oversized `-b:a` is capped). Never two-pass. `-an` stays muted.
 
@@ -64,13 +65,14 @@ Order is fixed in `handleTranslatePrompt`:
 - Thin installer: no `*.gguf` is ever bundled (`build.files` excludes models). First launch shows `#modelDl`; `download-model` IPC streams `model-download-progress` and warms the engine on success.
 - `llamaDiagnostics` + `llamaPrebuiltProbe` must keep working: they turn load failures into a pasteable answer. Keep `handleModelStatus` fields stable: `ready, loading, loadError, exists, size, engine, portable, fallbackToAppData`.
 - Portable app-data fallback is consent-gated: `handleDownloadModel` returns `needsConsent` without it, the renderer asks via the themed `confirmDialog` modal, and `#portableNote` stays visible while the fallback is active.
-- Temp drop imports go to `os.tmpdir()/plainffmpeg-drops`, capped at 500 MB.
+- Temp drop imports go to `os.tmpdir()/plainffmpeg-drops`, capped at 500 MB (enforced in main and renderer).
+- Spawned binaries must resolve beside the asar (`app.asar.unpacked`): `child_process.spawn` is not asar-patched, so asarUnpack alone is not enough (see `ffmpegPath`).
 
 ## IPC and UI
 
-- Channels (preload must expose all): `modelStatus, translatePrompt, downloadModel, pickFile, pickOutput, outputExists, saveDroppedFile, windowMin, windowMax, windowClose, probeMedia, runFfmpeg` plus `ffmpeg-log` / `ffmpeg-progress` / `model-download-progress` events.
+- Channels (preload must expose all): `modelStatus, translatePrompt, downloadModel, pickFile, pickOutput, outputExists, saveDroppedFile, openPath, windowMin, windowMax, windowClose, probeMedia, runFfmpeg` plus `ffmpeg-log` / `ffmpeg-progress` / `model-download-progress` events.
 - Frameless window (`frame: false`), custom `#titlebar` with `#minBtn #maxBtn #closeBtn`, `-webkit-app-region: drag` with `no-drag` on controls.
-- Errors surface via `#errorBanner` + `showBanner` + `prettyLlmError`. Never `window.alert` or native `confirm`. Overwrite uses `#confirmOverlay` + `confirmOverwriteUI`.
+- Errors surface via `#errorBanner` + `showBanner` + `prettyLlmError`. Never `window.alert` or native `confirm`. Overwrite uses `#confirmOverlay` + `confirmOverwriteUI`; storage consent reuses the same modal via `confirmDialog`.
 - Badge flow: `unavailable > loading > ready`, polled via `setTimeout(refreshStatus)`. Terminal `#terminal` starts empty and collapsed (`hidden`).
 - Renderer path helpers handle `/` and `\`. Preview URLs use `toFileUrl`. Drops handle `DataTransfer.files`, `items.getAsFile`, and `text/uri-list` fallback.
 

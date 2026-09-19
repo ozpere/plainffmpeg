@@ -59,8 +59,8 @@ The portable instead keeps its data in a `PlainFFmpegData` folder next to
 the exe (when that location is writable) - deleting the folder removes
 everything, no leftovers. If the exe folder is not writable, the portable
 asks before downloading the model to Windows app data instead, and keeps a
-visible note while that fallback is active. Either way the resolved model path is logged on
-boot so the ~1.3 GB is always findable.
+visible note while that fallback is active. Either way the resolved model
+path is logged on boot so the ~1.3 GB is always findable.
 
 Notes:
 
@@ -86,6 +86,7 @@ Notes:
 | `npm run download-model` | (Re)download the GGUF model into `models/` (resumable) |
 | `npm run fetch-vc-redist` | Fetch the MSVC redist into `assets/` (build-time only) |
 | `npm run dist:win` | Build the Windows installer + portable exe into `dist/` |
+| `npm run dist:linux` | Build the Linux AppImage into `dist/` |
 | `npm run install:win`  | Windows-safe install with preflight checks                |
 
 ## Project layout
@@ -96,14 +97,15 @@ src/
                        argument correction layers, ffmpeg runner, IPC
   preload.js           Minimal context-bridge API (sandboxed renderer)
   renderer/
-    index.html         UI structure
-    renderer.js        UI logic (load → probe → translate → run)
+    index.html         UI structure, model download card, open-folder shortcut
+    renderer.js        UI logic (load → probe → translate → run, model download)
     styles.css         Warm-charcoal theme
 scripts/
-  download-model.js    GGUF fetcher (Hugging Face, resumable layout)
+  download-model.js    GGUF fetcher (Hugging Face, resumable)
+  fetch-vc-redist.js   MSVC redist fetcher (build-time only, not committed)
   install-windows.js   Windows install helper (CPU-only, long paths, MSVC check)
   smoke-test.js        Headless verification suite
-assets/                Logo + platform icons
+assets/                Logo, platform icons, NSIS hooks
 models/                GGUF weights live here (gitignored, never committed)
 ```
 
@@ -117,6 +119,8 @@ models/                GGUF weights live here (gitignored, never committed)
   bitrate computed from the probed duration - two-pass is never used.
 - Output extensions always follow the translated container, and the app
   asks before overwriting an existing file.
+- Open folder jumps to the output directory (disabled until a destination
+  exists).
 
 ## License
 
