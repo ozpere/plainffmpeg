@@ -1,6 +1,6 @@
 # PlainFFmpeg - Agent Guide
 
-Self-contained offline Electron video editor. Plain English instruction is translated to FFmpeg args by a local GGUF model (`Qwen2.5-Coder-1.5B` via `node-llama-cpp`), corrected by deterministic layers, then run via bundled `ffmpeg-static`. 100% offline: no Ollama, no Python, no cloud, no accounts.
+Self-contained offline Electron video editor. Plain English instruction is translated to FFmpeg args by a local GGUF model (`Qwen3-1.7B` via `node-llama-cpp`), corrected by deterministic layers, then run via bundled `ffmpeg-static`. 100% offline: no Ollama, no Python, no cloud, no accounts.
 
 ## Stack
 
@@ -8,7 +8,7 @@ Self-contained offline Electron video editor. Plain English instruction is trans
 - `node-llama-cpp` v3 is pure ESM. Main process is CJS, so load it only via `await import('node-llama-cpp')`. Never `require('node-llama-cpp')` (throws ERR_REQUIRE_ESM).
 - `ffmpeg-static` + `fluent-ffmpeg` (spawned directly so arbitrary LLM flags run verbatim)
 - Vanilla JS renderer, no framework. `src/preload.js` is the only IPC bridge (contextIsolation, no nodeIntegration).
-- Model lives at `models/model.gguf` (~1.1 GB, gitignored). Never commit `*.gguf`.
+- Model lives at `models/model.gguf` (~1.3 GB, gitignored). Never commit `*.gguf`.
 
 ## Commands
 

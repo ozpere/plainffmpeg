@@ -3,7 +3,7 @@
  * Usage:
  *   npm run download-model
  *
- * Downloads Qwen2.5-Coder-1.5B-Instruct-Q4_K_M.gguf from Hugging Face and
+ * Downloads Qwen3-1.7B-Q4_K_M.gguf from Hugging Face and
  * saves a copy as ./models/model.gguf (the path the Electron main process loads).
  * Skips download if the file already exists. `--check-only` exits 1 when missing.
  */
@@ -12,14 +12,15 @@ const path = require('path');
 
 const MODEL_DIR = path.join(__dirname, '..', 'models');
 const TARGET = path.join(MODEL_DIR, 'model.gguf');
-const ALIAS = path.join(MODEL_DIR, 'Qwen2.5-Coder-1.5B-Instruct-Q4_K_M.gguf');
+const ALIAS = path.join(MODEL_DIR, 'Qwen_Qwen3-1.7B-Q4_K_M.gguf');
 
-// Canonical HF source (Q4_K_M quant).
+// Canonical HF sources (Q4_K_M quant, ~1.28GB).
 const SOURCES = [
-  'https://huggingface.co/Qwen/Qwen2.5-Coder-1.5B-Instruct-GGUF/resolve/main/qwen2.5-coder-1.5b-instruct-q4_k_m.gguf?download=true',
+  'https://huggingface.co/bartowski/Qwen_Qwen3-1.7B-GGUF/resolve/main/Qwen_Qwen3-1.7B-Q4_K_M.gguf?download=true',
+  'https://huggingface.co/lmstudio-community/Qwen3-1.7B-GGUF/resolve/main/Qwen3-1.7B-Q4_K_M.gguf?download=true',
 ];
 
-const MIN_BYTES = 500 * 1024 * 1024; // ~0.9-1.1GB expected; warn if smaller
+const MIN_BYTES = 800 * 1024 * 1024; // ~1.28GB expected; warn if smaller
 
 function exists(p) {
   try {

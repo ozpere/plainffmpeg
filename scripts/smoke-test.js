@@ -57,6 +57,15 @@ async function main() {
     '-i in.mp4 -c:v libx264 -c:a aac'
   );
   assert.throws(() => mainMod.sanitizeModelOutput('Sure, I can help with that.'), /incomplete/);
+  // Qwen3 hybrid thinking traces are stripped before parsing
+  assert.strictEqual(
+    mainMod.sanitizeModelOutput('<think>let me reason about codecs</think>\n-i in.mp4 out.mkv'),
+    '-i in.mp4 out.mkv'
+  );
+  assert.strictEqual(
+    mainMod.sanitizeModelOutput('<think>line one\nline two</think>-i in.mp4 -c:v libx264 out.mkv'),
+    '-i in.mp4 -c:v libx264 out.mkv'
+  );
   // missing output file is recovered deterministically (container from words/codecs)
   assert.strictEqual(typeof mainMod.ensureOutputFile, 'function');
   let eo = mainMod.ensureOutputFile(['-i', 'in.mp4', '-c:v', 'libvpx-vp9', '-an'], 'convert to webm and mute it');
@@ -407,6 +416,7 @@ async function main() {
   assert.ok(mainMod.SYSTEM_PROMPT.includes('libvpx-vp9'), 'prompt must pin webm codecs');
   assert.ok(mainMod.SYSTEM_PROMPT.includes('EXAMPLES'), 'prompt must carry few-shot examples');
   assert.ok(mainMod.SYSTEM_PROMPT.includes('Never invent'), 'prompt must forbid inventing paths');
+  assert.ok(mainMod.SYSTEM_PROMPT.includes('non-thinking mode'), 'prompt must disable Qwen3 thinking traces');
   console.log('[smoke] system prompt OK');
 
   // button order: Translate only | Translate & Run FFmpeg | Run FFmpeg

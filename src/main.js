@@ -52,6 +52,8 @@ const SYSTEM_PROMPT = [
   '- NEVER include markdown, code fences, backticks, explanations, or commentary.',
   '- NEVER include the `ffmpeg` binary name - start directly with flags (usually `-i`).',
   '- Exactly ONE command. No pipes, no `&&`, no shell operators, no comments.',
+  '- Always answer directly in non-thinking mode: NO thinking trace, NO <think> blocks.',
+  '- A trailing `/no_think` marker on the request means the same - obey it.',
   '',
   'INPUT:',
   '- Always include the input exactly once, verbatim, as `-i <INPUT FILE PATH>` using the exact path from the user message.',
@@ -121,6 +123,9 @@ function resolveModelPath() {
   }
   // Also accept the raw Qwen filename as an alias, then treat it as model.gguf
   const aliases = [
+    path.join(__dirname, '..', 'models', 'Qwen_Qwen3-1.7B-Q4_K_M.gguf'),
+    path.join(__dirname, '..', 'models', 'Qwen3-1.7B-Q4_K_M.gguf'),
+    // Previous generation - keep working for users who already downloaded it.
     path.join(__dirname, '..', 'models', 'Qwen2.5-Coder-1.5B-Instruct-Q4_K_M.gguf'),
   ];
   for (const p of aliases) {
@@ -289,6 +294,9 @@ function preloadLlm() {
 
 function sanitizeModelOutput(raw) {
   let text = String(raw || '').trim();
+  // Qwen3 hybrid models may emit a thinking trace despite non-thinking mode -
+  // drop it before anything else so only the final answer is parsed.
+  text = text.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
   // Strip markdown fences / backticks the model may add despite the system prompt.
   text = text.replace(/```(?:bash|sh|ffmpeg)?/gi, '').replace(/```/g, '').replace(/`/g, '').trim();
   // Split into lines, strip list markers/bullets/arrows ("- ", "*", "1.", "→").
@@ -572,7 +580,7 @@ async function handleTranslatePrompt({ instruction, inputFile, duration }) {
       `Encode video at about ${vk}k: use exactly -b:v ${vk}k -maxrate ${vk}k -bufsize ${vk * 2}k, ` +
       `audio -c:a aac -b:a 128k, single pass only.\n`;
   }
-  const userPrompt = `Input file: ${inputFile || 'input.mp4'}\n${durLine}${sizeLine}Task: ${instruction || ''}\nFFmpeg args:`;
+  const userPrompt = `Input file: ${inputFile || 'input.mp4'}\n${durLine}${sizeLine}Task: ${instruction || ''}\nFFmpeg args:\n/no_think`;
   // No silent fallback: any LLM problem is returned as an error so the UI
   // can alert the user instead of running a guessed-up command.
   try {

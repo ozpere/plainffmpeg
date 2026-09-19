@@ -6,7 +6,7 @@ Self-contained video editor using plain English - describe the edit, the app tra
 
 1. Load a video (drag & drop, or *Browse…*).
 2. Type an instruction, e.g. *"Convert to mp4, trim the last 5 seconds, make it 360p"*.
-3. The bundled GGUF model (`Qwen2.5-Coder-1.5B` via `node-llama-cpp`)
+3. The bundled GGUF model (`Qwen3-1.7B` via `node-llama-cpp`)
    translates it to FFmpeg arguments, which run through a bundled
    `ffmpeg-static` binary with live logs.
 
@@ -21,7 +21,7 @@ instead. No silent fallbacks, anywhere.
 - **Windows only:** Microsoft Visual C++ Redistributable (x64) -
   https://aka.ms/vs/17/release/vc_redist.x64.exe (required by the
   prebuilt LLM binary)
-- ~3 GB free (dependencies + the ~1.1 GB model)
+- ~3 GB free (dependencies + the ~1.3 GB model)
 
 ## Install & run
 
