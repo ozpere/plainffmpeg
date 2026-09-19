@@ -40,7 +40,7 @@ npm start
 `install:win` forces CPU-only LLM binaries (skipping the Vulkan dead end),
 runs the preflight checks, and verifies the native binary loads.
 The model downloads automatically on first install via `postinstall`
-(`npm run download-model` anytime).
+(`npm run download-model` anytime; skipped when offline).
 
 ## Windows installer
 
@@ -49,33 +49,16 @@ npm run fetch-vc-redist
 npm run dist:win
 ```
 
-This builds a per-user NSIS installer (`PlainFFmpeg-Setup-*.exe`) and a
-portable exe (`PlainFFmpeg-Portable-*.exe`) in `dist/`. The installer is
-thin: the ~1.3 GB model is not bundled. On first launch the app shows a
-Download card and fetches the model itself (resumable, with progress),
-then works fully offline. Installed copies keep the model in the per-user
-app data folder, so no admin rights are needed. Uninstalling removes it.
-The portable instead keeps its data in a `PlainFFmpegData` folder next to
-the exe (when that location is writable): the model, Electron's own
-profile data, and any drag-and-drop imports - deleting the folder removes
-everything, no leftovers. If the exe folder is not writable, the portable
-asks before downloading the model to Windows app data instead, and keeps a
-visible note while that fallback is active. Either way the resolved model
-path is logged on boot so the ~1.3 GB is always findable.
-
-Notes:
-
-- `fetch-vc-redist` downloads the Microsoft C++ runtime so the installer
-  can set it up silently (the local AI engine needs it on stock Windows).
-- Windows releases are also built by CI (`.github/workflows/release.yml`,
-  manual run or a `v*` tag) and uploaded as artifacts (14-day retention -
-  the 500 MB Actions quota is account-wide, so old runs expire instead of
-  piling up). Pushing a `v*` tag additionally publishes a permanent GitHub
-  Release with all three files attached; manual runs never publish.
-- `npm run dist:linux` builds an `x86_64.AppImage` (also built by CI).
-  No extra runtime is needed on Linux.
-- Unsigned builds trigger a Windows SmartScreen warning on first run -
-  expected until releases are code-signed.
+Builds a per-user NSIS installer and a portable exe in `dist/`. The
+installer is thin (no ~1.3 GB model bundled) and sets up the MSVC runtime
+silently - declining its admin prompt still installs the app, but
+translation needs that runtime. The portable keeps everything (model,
+profile, imports) in `PlainFFmpegData` next to the exe, so deleting the
+folder leaves nothing behind. If the exe folder is not writable, the
+portable asks before using Windows app data instead. First launch
+downloads the model in-app (resumable, with progress), then works fully
+offline. Releases are built by CI on demand or `v*` tags; unsigned builds
+trigger SmartScreen until code-signed.
 
 ## Scripts
 
@@ -94,15 +77,18 @@ Notes:
 
 ```
 src/
-  main.js              Electron main process: window, local LLM engine,
-                       argument correction layers, ffmpeg runner, IPC
+  main.js              Electron main process: window, IPC, translate/run
+                       orchestration (re-exports fixups/paths/llm)
+  fixups.js            Deterministic FFmpeg argument correction layers
+  paths.js             Model, portable, and output locations; MSVC detection
+  llm.js               Local GGUF engine (prompt, session, diagnostics)
   preload.js           Minimal context-bridge API (sandboxed renderer)
   renderer/
     index.html         UI structure, model download card, open-folder shortcut
     renderer.js        UI logic (load → probe → translate → run, model download)
     styles.css         Warm-charcoal theme
 scripts/
-  download-model.js    GGUF fetcher (Hugging Face, resumable)
+  download-model.js    GGUF fetcher (Hugging Face, resumable, format-checked)
   fetch-vc-redist.js   MSVC redist fetcher (build-time only, not committed)
   install-windows.js   Windows install helper (CPU-only, long paths, MSVC check)
   smoke-test.js        Headless verification suite
@@ -112,8 +98,9 @@ models/                GGUF weights live here (gitignored, never committed)
 
 ## Notes
 
-- The engine badge polls the LLM state: unavailable → loading → ready.
-  A translation requested mid-load simply waits for it.
+- The engine badge polls the LLM state: unavailable → loading → ready
+  (or failed, with the cause in the logs). A translation requested
+  mid-load simply waits for it.
 - "Trim the last N seconds" means *cutting* those seconds off
   (`-t duration-N`); "keep the last N" keeps the tail.
 - Size limits ("below 2GB") are enforced with single-pass capped

@@ -5,7 +5,7 @@ Self-contained offline Electron video editor. Plain English instruction is trans
 ## Stack
 
 - Node.js 20 LTS (matches Electron 33 runtime), Electron 33, CommonJS in `src/main.js`
-- `node-llama-cpp` v3 is pure ESM. Main process is CJS, so load it only via `await import('node-llama-cpp')`. Never `require('node-llama-cpp')` (throws ERR_REQUIRE_ESM).
+- `node-llama-cpp` v3 is pure ESM. Our code is CJS, so load it only via `await import('node-llama-cpp')` in `src/llm.js`. Never `require()` it (throws ERR_REQUIRE_ESM).
 - `ffmpeg-static` + `fluent-ffmpeg` (spawned directly so arbitrary LLM flags run verbatim)
 - Vanilla JS renderer, no framework. `src/preload.js` is the only IPC bridge (contextIsolation, no nodeIntegration).
 - Model lives at `models/model.gguf` in dev (~1.3 GB, gitignored). Never commit `*.gguf`.
@@ -23,7 +23,7 @@ Self-contained offline Electron video editor. Plain English instruction is trans
 | `npm run dist:linux` | Build Linux AppImage (`dist/`) |
 | `npm run install:win` | Windows-safe install: CPU-only binaries, long-paths, MSVC check |
 
-Run `npm test` plus `npm run test:headless` after every change. Smoke test is the contract: helpers, prompt content, IPC surface, branding, CSS theme, and UX copy.
+Run `npm test` plus `npm run test:headless` after every change. Smoke test is the contract: helpers, prompt content, IPC surface, module boundaries (main re-exports fixups/paths/llm by identity), branding, CSS theme, UX copy, downloader integrity, installer copy, and a11y hooks.
 
 ## Layout
 
@@ -38,14 +38,14 @@ src/renderer/index.html  UI structure, frameless titlebar, split progress bars, 
 src/renderer/styles.css  Warm-charcoal theme, no gradients
 scripts/download-model.js GGUF fetcher, resumable (TARGET is models/model.gguf, shared by main via downloadTo)
 scripts/fetch-vc-redist.js MSVC redist fetcher for the installer (not committed)
-assets/vc-redist.nsh     NSIS hooks: silent MSVC redist install (`customInstall`, needs vc_redist.x64.exe beside it at build) and uninstall cleanup (`customUnInstall` removes `%APPDATA%\PlainFFmpeg` and the staged copy `%LOCALAPPDATA%\plainffmpeg-updater`)
-.github/workflows/release.yml Windows CI: install, checks, dist:win, dist:linux, upload exes
+assets/vc-redist.nsh     NSIS hooks: silent MSVC redist install (`customInstall`, needs vc_redist.x64.exe beside it at build) and uninstall cleanup (`customUnInstall` removes `%APPDATA%\PlainFFmpeg`)
+.github/workflows/release.yml Windows CI (least-privilege, npm-cached): install, checks, dist:win, dist:linux, upload exes
 scripts/install-windows.js CPU-only install helper
 scripts/smoke-test.js    Headless contract, asserts behavior not just syntax
 models/                  Weights only (gitignored). Keep models/.gitkeep.
 ```
 
-## Translation pipeline (src/main.js)
+## Translation pipeline (`src/fixups.js`, ordered by `handleTranslatePrompt` in `src/main.js`)
 
 Order is fixed in `handleTranslatePrompt`:
 
@@ -60,29 +60,34 @@ Order is fixed in `handleTranslatePrompt`:
 
 ## Critical invariants
 
-- No silent fallbacks anywhere. LLM failure returns `{ ok: false, error, diag }` and UI shows banner. Never run a guessed command. `fallbackTranslate` must not exist.
+- No silent fallbacks anywhere. LLM failure returns `{ ok: false, error, diag, errorKind }` (plus `hint` for `msvc-missing`) and UI shows banner. Never run a guessed command. `fallbackTranslate` must not exist.
 - `-y` is forced at run time (`finalArgs.unshift('-y')`). Overwrite consent is asked beforehand via in-app modal.
 - Output extension always follows the translated container (`enforceOutputExtension`, `coerceExt`). `defaultOutputPath` is `output.<ext>` next to input, `output.ext` before translation. Never guess a container.
 - Probe uses `ffmpeg -i` stderr parse (no ffprobe dep). `run-ffmpeg` replaces trailing output token with explicit `outputFile`.
 - `resolveModelPath` honors `MODEL_PATH` env. Portable branch is deliberately short: exe-side `PlainFFmpegData` home, then per-user data dir as the LAST fallback (nothing after it). Other flows: preferred write target, then any dir holding an existing download, then Qwen alias filenames.
 - Thin installer: no `*.gguf` is ever bundled (`build.files` excludes models). First launch shows `#modelDl`; `download-model` IPC streams `model-download-progress` and warms the engine on success.
-- `llamaDiagnostics` + `llamaPrebuiltProbe` must keep working: they turn load failures into a pasteable answer. Keep `handleModelStatus` fields stable: `ready, loading, loadError, exists, size, engine, portable, fallbackToAppData`.
-- Portable app-data fallback is consent-gated: `handleDownloadModel` returns `needsConsent` without it, the renderer asks via the themed `confirmDialog` modal, and `#portableNote` stays visible while the fallback is active. Portable launches also redirect Electron's own profile (`userData`, `sessionData`, `cache`) into `PlainFFmpegData`, so deleting the folder leaves no trace.
+- `llamaDiagnostics` + `llamaPrebuiltProbe` must keep working: they turn load failures into a pasteable answer. Keep `handleModelStatus` fields stable: `ready, loading, loadError, loadErrorKind, msvc, exists, size, engine, portable, fallbackToAppData`.
+- Portable app-data fallback is consent-gated: `handleDownloadModel` returns `needsConsent` without it, the renderer asks via the themed `confirmDialog` modal, and `#portableNote` stays visible while the fallback is active. Portable launches also redirect Electron's own profile (`userData`, `sessionData`) into `PlainFFmpegData`, so deleting the folder leaves no trace.
 - Temp drop imports go to `dropsDir()` (`PlainFFmpegData/drops` for portable runs, else `os.tmpdir()/plainffmpeg-drops`), capped at 500 MB (enforced in main and renderer).
 - Spawned binaries must resolve beside the asar (`app.asar.unpacked`): `child_process.spawn` is not asar-patched, so asarUnpack alone is not enough (see `ffmpegPath`).
+- Downloads are verified before staging: per-source `.source` sidecars (no cross-origin resume), `Content-Range` start validated (one restart), `done === total` enforced, GGUF magic gate (`expectMagic`) for models, MZ + size gate (`assertPlausibleExe`) for the redist. A 60s stall watchdog aborts hung model connections for resume; the redist fetch retries 3x with a timeout.
+- `postinstall` uses `--best-effort` (offline installs warn and continue); direct `npm run download-model` stays strict.
+- Preload subscribers return unsubscribe closures, never the emitter. `confirmDialog` serializes through a queue; the modal traps/restores focus and parks the background with `inert`.
+- Translate gates time/size requests on the probed duration; Run is locked during translation; `setFile` resets translation state; `run-ffmpeg` requires an IPC sender (guarded, exported for tests).
+- NSIS: exit allowlist `{0, 1638, 3010}`, decline codes `{1223, 5}` get elevation-specific guidance; uninstall removes `%APPDATA%\PlainFFmpeg` only.
 
 ## IPC and UI
 
 - Channels (preload must expose all): `modelStatus, translatePrompt, downloadModel, pickFile, pickOutput, outputExists, saveDroppedFile, openPath, windowMin, windowMax, windowClose, probeMedia, runFfmpeg` plus `ffmpeg-log` / `ffmpeg-progress` / `model-download-progress` events.
 - Frameless window (`frame: false`), custom `#titlebar` with `#minBtn #maxBtn #closeBtn`, `-webkit-app-region: drag` with `no-drag` on controls.
 - Errors surface via `#errorBanner` + `showBanner` + `prettyLlmError`. Never `window.alert` or native `confirm`. Overwrite uses `#confirmOverlay` + `confirmOverwriteUI`; storage consent reuses the same modal via `confirmDialog`.
-- Badge flow: `unavailable > loading > ready`, polled via `setTimeout(refreshStatus)`. Terminal `#terminal` starts empty and collapsed (`hidden`).
+- Badge flow: `unavailable > loading > ready`, plus red `error` on load failure. One loop via `scheduleRefresh` (cancels the pending poll first). Terminal `#terminal` starts empty and collapsed (`hidden`), log capped at 200 KB.
 - Renderer path helpers handle `/` and `\`. Preview URLs use `toFileUrl`. Drops handle `DataTransfer.files`, `items.getAsFile`, and `text/uri-list` fallback.
 
 ## Style and copy (enforced by smoke test)
 
 - House style: short hyphen `-` only. Do not introduce U+2014 in source, styles, or UI copy.
-- No `linear-gradient`, no glow, no purple/indigo (`#6c8cff #9d7bff #4a6cf7 #8b5cf6`), no `text-transform: uppercase`. Pastel badges: loading `#f2b8b0`, ready `#bfe3b8`. Centered `.btn-row`, preview capped at `max-height: 320px`, sticky titlebar.
+- No `linear-gradient`, no glow, no purple/indigo (`#6c8cff #9d7bff #4a6cf7 #8b5cf6`), no `text-transform: uppercase`. Pastel badges: loading `#f2b8b0`, ready `#bfe3b8`, error `#f2b8b0`. Centered `.btn-row`, preview capped at `max-height: 320px`, sticky titlebar.
 - Button order in `index.html`: `translateOnlyBtn`, `translateBtn` (`✦ Translate & Run FFmpeg`, monochrome glyph, never color emoji), `runBtn`.
 - Copy: title `PlainFFmpeg`, subtitle stresses `100% offline`, statuses capitalized (`Translating...`, `Running...`, `Failed`, `Done`, `Cancelled`, `Idle`), badge prefix `Engine: ...`.
 
@@ -90,7 +95,7 @@ Order is fixed in `handleTranslatePrompt`:
 
 - `install-windows.js` forces `NODE_LLAMA_CPP_GPU=false` (skips Vulkan dead end), enables `git core.longpaths true`, warns if project path is long (use `C:\plainffmpeg`), checks MSVC DLLs, verifies native binary loads with dynamic `import()`.
 - `SKIP_MODEL_DOWNLOAD=1` skips the ~1 GB fetch for offline/CI smoke runs.
-- Windows releases (`.github/workflows/release.yml`, manual or `v*` tag): `fetch-vc-redist`, `install:win`, checks, `dist:win`, upload exes (artifacts expire via `retention-days`: 14 manual, 1 on tags). Linux AppImage (`dist:linux`) builds in the same workflow on `ubuntu-22.04`. Tag pushes additionally publish a permanent Release (`publish-release` job, tag-only gate); manual runs never publish. electron-builder config lives in `package.json` (`build`): NSIS per-user + portable x64, AppImage x64, `asarUnpack` for `@node-llama-cpp` and `ffmpeg-static`, `npmRebuild: false`, NSIS `include` runs the bundled `vc_redist` silently. The unsigned build triggers SmartScreen; signing is a future paid step.
+- Windows releases (`.github/workflows/release.yml`, manual or `v*` tag): `fetch-vc-redist`, `install:win`, checks, `dist:win`, upload exes (artifacts expire via `retention-days`: 14 manual, 1 on tags). Linux AppImage (`dist:linux`) builds in the same workflow on `ubuntu-22.04`. Tag pushes additionally publish a permanent Release (`publish-release` job, tag-only gate); manual runs never publish. electron-builder config lives in `package.json` (`build`): NSIS per-user + portable x64, AppImage x64, `asarUnpack` for `@node-llama-cpp` and `ffmpeg-static`, `npmRebuild: false`, NSIS `include` runs the bundled `vc_redist` silently with an exit-code allowlist and decline guidance. The unsigned build triggers SmartScreen; signing is a future paid step.
 
 ## Adding a fixup
 
