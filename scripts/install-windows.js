@@ -153,5 +153,5 @@ if (verify.status !== 0) {
       'Video loading, probing, and FFmpeg runs still work; translations will report a clear error until the binary loads.'
   );
 } else {
-  log('done. Next: model downloads automatically (postinstall), then run "npm start".');
+  log('done. Next: run "npm start" (first launch downloads the model if missing), or "npm run download-model" now.');
 }

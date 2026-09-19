@@ -41,13 +41,14 @@ function assertPlausibleExe(filePath) {
 }
 
 // Present redist usable as-is (size and MZ header), or false. A stale or
-// wrong file is removed so the fetch below heals it.
-function existingRedistUsable() {
+// wrong file is removed so the fetch below heals it. Defaults to the real
+// location; tests pass a temp file so a fetched redist is never touched.
+function existingRedistUsable(dest = DEST) {
   try {
-    assertPlausibleExe(DEST);
+    assertPlausibleExe(dest);
     return true;
   } catch {
-    try { fs.rmSync(DEST, { force: true }); } catch { /* ignore */ }
+    try { fs.rmSync(dest, { force: true }); } catch { /* ignore */ }
     return false;
   }
 }

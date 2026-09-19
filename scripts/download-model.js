@@ -49,9 +49,10 @@ function fileHasMagic(filePath, magic) {
 
 // Present model usable as-is, or null. A present-but-wrong file (HTML error
 // page, truncated junk) is removed so the download below heals it instead
-// of the skip gate trusting it forever.
-function takeUsableModel() {
-  for (const p of [TARGET, ALIAS]) {
+// of the skip gate trusting it forever. Candidates default to the real
+// locations; tests pass temp dirs so a real 1.3 GB model is never touched.
+function takeUsableModel(candidates = [TARGET, ALIAS]) {
+  for (const p of candidates) {
     if (!exists(p)) continue;
     if (fileHasMagic(p, 'GGUF')) return p;
     console.log(`[download-model] ${p} failed format check - removing.`);

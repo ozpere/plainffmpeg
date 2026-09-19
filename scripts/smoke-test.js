@@ -870,6 +870,8 @@ async function main() {
     console.log('[smoke] format gates OK');
   }
   // healing: present-but-wrong files must be removed, never trusted.
+  // Temp dirs only: a real 1.3 GB model or fetched redist must never be
+  // touched by these tests.
   {
     const dl = require('../scripts/download-model.js');
     const vc = require('../scripts/fetch-vc-redist.js');
@@ -878,27 +880,33 @@ async function main() {
     assert.strictEqual(typeof vc.existingRedistUsable, 'function');
     const missing = path.join(__dirname, 'smoke-missing.tmp');
     assert.strictEqual(dl.fileHasMagic(missing, 'GGUF'), false, 'missing file has no magic');
-    // Corrupt model at the real target: removed, reported unusable.
-    fs.mkdirSync(path.dirname(dl.TARGET), { recursive: true });
+    // Corrupt model: removed, reported unusable.
+    const mdir = fs.mkdtempSync(path.join(os.tmpdir(), 'pfm-heal-'));
     try {
-      fs.writeFileSync(dl.TARGET, Buffer.alloc(2048, 0x41));
-      assert.strictEqual(dl.takeUsableModel(), null, 'corrupt model must not count as present');
-      assert.strictEqual(fs.existsSync(dl.TARGET), false, 'corrupt model must be removed for re-download');
+      const badModel = path.join(mdir, 'model.gguf');
+      fs.writeFileSync(badModel, Buffer.alloc(2048, 0x41));
+      assert.strictEqual(dl.takeUsableModel([badModel]), null, 'corrupt model must not count as present');
+      assert.strictEqual(fs.existsSync(badModel), false, 'corrupt model must be removed for re-download');
       const good = Buffer.concat([Buffer.from('GGUF'), Buffer.alloc(2048, 0x07)]);
-      fs.writeFileSync(dl.TARGET, good);
-      assert.strictEqual(dl.takeUsableModel(), dl.TARGET, 'good model must count as present');
+      fs.writeFileSync(badModel, good);
+      assert.strictEqual(dl.takeUsableModel([badModel]), badModel, 'good model must count as present');
     } finally {
-      fs.rmSync(dl.TARGET, { force: true });
+      fs.rmSync(mdir, { recursive: true, force: true });
     }
-    // Stale redist at the real dest: removed, reported unusable.
+    // Stale redist: removed, reported unusable.
+    const rdir = fs.mkdtempSync(path.join(os.tmpdir(), 'pfm-heal-vc-'));
     try {
-      const stale = Buffer.alloc(10 * 1024 * 1024 + 16, 0x41);
-      fs.writeFileSync(vc.DEST, stale);
-      assert.strictEqual(vc.existingRedistUsable(), false, 'non-MZ redist must not count as present');
-      assert.strictEqual(fs.existsSync(vc.DEST), false, 'stale redist must be removed for re-fetch');
+      const stale = path.join(rdir, 'vc_redist.x64.exe');
+      const junk = Buffer.alloc(10 * 1024 * 1024 + 16, 0x41);
+      fs.writeFileSync(stale, junk);
+      assert.strictEqual(vc.existingRedistUsable(stale), false, 'non-MZ redist must not count as present');
+      assert.strictEqual(fs.existsSync(stale), false, 'stale redist must be removed for re-fetch');
+      const big = Buffer.alloc(10 * 1024 * 1024 + 16, 0);
+      big[0] = 0x4d; big[1] = 0x5a;
+      fs.writeFileSync(stale, big);
+      assert.strictEqual(vc.existingRedistUsable(stale), true, 'sized MZ redist must count as present');
     } finally {
-      fs.rmSync(vc.DEST, { force: true });
-      fs.rmSync(vc.DEST + '.part', { force: true });
+      fs.rmSync(rdir, { recursive: true, force: true });
     }
     console.log('[smoke] healing OK');
   }
