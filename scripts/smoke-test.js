@@ -526,6 +526,7 @@ async function main() {
   const nsh = fs.readFileSync(path.join(__dirname, '../assets/vc-redist.nsh'), 'utf8');
   assert.ok(nsh.includes('customUnInstall'), 'installer must clean up on uninstall');
   assert.ok(nsh.includes('RMDir /r "$APPDATA\\PlainFFmpeg"'), 'uninstall must remove the model data dir');
+  assert.ok(nsh.includes('RMDir /r "$LOCALAPPDATA\\plainffmpeg-updater"'), 'uninstall must remove the staged installer copy');
   assert.ok(renderer.includes('AI model path:'), 'resolved model path must be logged at boot');
   console.log('[smoke] packaging OK');
 
