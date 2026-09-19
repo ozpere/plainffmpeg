@@ -14,9 +14,12 @@ const required = [
   'src/renderer/renderer.js',
   'src/renderer/styles.css',
   'scripts/download-model.js',
+  'scripts/fetch-vc-redist.js',
   'assets/logo.png',
   'assets/icon.ico',
   'assets/icon.icns',
+  'assets/vc-redist.nsh',
+  '.github/workflows/release-win.yml',
 ];
 
 async function main() {
@@ -313,7 +316,7 @@ async function main() {
   }
 
   // preload/renderer reference matching IPC channels + error UI
-  for (const ch of ['translatePrompt', 'runFfmpeg', 'modelStatus', 'pickFile', 'pickOutput', 'probeMedia', 'outputExists', 'saveDroppedFile', 'windowMin', 'windowMax', 'windowClose']) {
+  for (const ch of ['translatePrompt', 'runFfmpeg', 'modelStatus', 'pickFile', 'pickOutput', 'probeMedia', 'outputExists', 'saveDroppedFile', 'downloadModel', 'windowMin', 'windowMax', 'windowClose']) {
     assert.ok(preload.includes(ch), `preload missing ${ch}`);
   }
   assert.ok(!preload.includes('confirmOverwrite'), 'native confirm dialog must be gone (in-app modal instead)');
@@ -413,8 +416,75 @@ async function main() {
   assert.ok(renderer.includes("terminal.hidden = false"), 'failures must auto-expand the logs');
   console.log('[smoke] failure UX OK');
 
-  // preview capped; pastel badge states
+  // first-launch model download card (thin installer: weights are fetched
+  // in-app, never bundled)
+  assert.ok(html.includes('id="modelDl"'), 'UI must have the first-launch download card');
+  assert.ok(html.includes('id="modelDlBtn"'), 'UI must have the model download button');
+  assert.ok(html.includes('id="barModel"'), 'UI must have the model progress bar');
+  assert.ok(renderer.includes('downloadModel'), 'renderer must wire the model download');
+  assert.ok(renderer.includes('onModelDownload'), 'renderer must show download progress');
+  assert.ok(renderer.includes('setModelDlVisible'), 'download card must follow engine status');
+  console.log('[smoke] model download UI OK');
+
+  // windows packaging: thin installer (model fetched on first launch)
+  const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
+  assert.ok(pkg.build && pkg.build.appId === 'com.ozpere.plainffmpeg', 'build must declare the app id');
+  const winTargets = (pkg.build.win && pkg.build.win.target) || [];
+  assert.ok(winTargets.some((t) => t.target === 'nsis'), 'windows build must produce an NSIS installer');
+  assert.ok(winTargets.some((t) => t.target === 'portable'), 'windows build must produce a portable exe');
+  assert.ok((pkg.build.asarUnpack || []).some((p) => p.includes('@node-llama-cpp')), 'native LLM bins must be unpacked from asar');
+  assert.ok((pkg.build.asarUnpack || []).some((p) => p.includes('ffmpeg-static')), 'ffmpeg binary must be unpacked from asar');
+  assert.ok(!(pkg.build.files || []).some((f) => f.includes('.gguf')), 'installer stays thin - no model weights bundled');
+  assert.ok((pkg.build.files || []).includes('scripts/download-model.js'), 'first-launch downloader must ship in the app');
+  assert.strictEqual(pkg.build.nsis && pkg.build.nsis.include, 'assets/vc-redist.nsh', 'installer must bundle the MSVC redist step');
+  assert.ok(pkg.scripts['dist:win'] && pkg.scripts['fetch-vc-redist'], 'dist scripts must exist');
+  assert.strictEqual(typeof mainMod.handleDownloadModel, 'function');
+  assert.strictEqual(typeof mainMod.userDataModelsDir, 'function');
+  console.log('[smoke] packaging OK');
+
+  // resumable downloader: seeded .part file must resume, not restart
+  {
+    const http = require('http');
+    const PAYLOAD = Buffer.alloc(256 * 1024, 0xab);
+    const srv = http.createServer((req, res) => {
+      const m = /bytes=(\d+)-/.exec(req.headers.range || '');
+      if (m) {
+        const start = parseInt(m[1], 10);
+        const slice = PAYLOAD.slice(start);
+        res.writeHead(206, {
+          'Content-Length': slice.length,
+          'Content-Range': `bytes ${start}-${PAYLOAD.length - 1}/${PAYLOAD.length}`,
+          'Accept-Ranges': 'bytes',
+        });
+        res.end(slice);
+      } else {
+        res.writeHead(200, { 'Content-Length': PAYLOAD.length, 'Accept-Ranges': 'bytes' });
+        res.end(PAYLOAD);
+      }
+    });
+    await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+    const dest = path.join(__dirname, 'smoke-model.tmp');
+    try {
+      fs.writeFileSync(dest + '.part', PAYLOAD.slice(0, PAYLOAD.length / 2));
+      const dl = require('../scripts/download-model.js');
+      const seen = [];
+      const { bytes } = await dl.downloadTo(`http://127.0.0.1:${srv.address().port}/model.gguf`, dest, {
+        onProgress: (p) => seen.push(p),
+      });
+      assert.strictEqual(bytes, PAYLOAD.length, 'resumed download must total the full payload');
+      assert.deepStrictEqual(fs.readFileSync(dest), PAYLOAD, 'resumed bytes must match exactly');
+      assert.ok(seen.length > 0 && seen[0].done >= PAYLOAD.length / 2, 'progress must resume from the partial file');
+      assert.ok(!fs.existsSync(dest + '.part'), 'no leftover .part file');
+    } finally {
+      fs.rmSync(dest, { force: true });
+      fs.rmSync(dest + '.part', { force: true });
+      srv.close();
+    }
+    console.log('[smoke] resumable download OK');
+  }
   const css = fs.readFileSync(path.join(__dirname, '../src/renderer/styles.css'), 'utf8');
+  assert.ok(css.includes('.model-dl[hidden]'), 'download card must honor hidden');
+  assert.ok(css.includes('#barModel'), 'model progress bar must be styled');
   assert.ok(css.includes('max-height: 320px'), 'video preview must be size-capped');
   assert.ok(css.includes('position: sticky'), 'title bar must stay frozen while scrolling');
   assert.ok(/\.badge\.loading\s*{[^}]*#f2b8b0/i.test(css), 'loading badge must be pastel red');
@@ -435,7 +505,7 @@ async function main() {
   const bannedDash = String.fromCharCode(0x2014);
   for (const f of ['src/main.js', 'src/preload.js', 'src/renderer/index.html',
     'src/renderer/renderer.js', 'src/renderer/styles.css', 'package.json',
-    'scripts/download-model.js', 'scripts/install-windows.js']) {
+    'scripts/download-model.js', 'scripts/fetch-vc-redist.js', 'scripts/install-windows.js']) {
     const content = fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
     assert.ok(!content.includes(bannedDash), `${f} must not contain em-dashes`);
   }

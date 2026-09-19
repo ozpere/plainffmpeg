@@ -12,6 +12,8 @@ contextBridge.exposeInMainWorld('api', {
   windowClose: () => ipcRenderer.invoke('window-close'),
   probeMedia: (inputFile) => ipcRenderer.invoke('probe-media', inputFile),
   runFfmpeg: (payload) => ipcRenderer.invoke('run-ffmpeg', payload),
+  downloadModel: () => ipcRenderer.invoke('download-model'),
+  onModelDownload: (cb) => ipcRenderer.on('model-download-progress', (_e, p) => cb(p)),
   onLog: (cb) => ipcRenderer.on('ffmpeg-log', (_e, p) => cb(p)),
   onProgress: (cb) => ipcRenderer.on('ffmpeg-progress', (_e, p) => cb(p)),
 });

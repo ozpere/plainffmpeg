@@ -28,6 +28,11 @@
   const toggleLogsBtn = $('toggleLogsBtn');
   const minBtn = $('minBtn');
   const maxBtn = $('maxBtn');
+  const modelDl = $('modelDl');
+  const modelDlBtn = $('modelDlBtn');
+  const modelDlBarWrap = $('modelDlBarWrap');
+  const barModel = $('barModel');
+  const modelDlStatus = $('modelDlStatus');
   const closeBtn = $('closeBtn');
   const titlebar = $('titlebar');
   const terminal = $('terminal');
@@ -58,7 +63,7 @@
         'Reinstalling the app usually fixes this. Full technical details are in the logs below.';
     }
     if (/model file not found/i.test(m)) {
-      return 'Model file not found. Reinstall the app or run `npm run download-model`, then try again.';
+      return 'Model file not found. Press "Download AI model" above (one-time download), or run `npm run download-model` in dev, then try again.';
     }
     return m;
   }
@@ -239,20 +244,27 @@
 
   // Polls until the background LLM load finishes: the badge goes
   // unavailable → loading (red) → ready (green) without blocking the UI.
+  // With no model on disk the download card shows instead of dev-only advice.
+  function setModelDlVisible(v) {
+    if (modelDl) modelDl.hidden = !v;
+  }
   async function refreshStatus() {
     let repollMs = 0;
     try {
       const s = await window.api.modelStatus();
       if (s.ready) {
+        setModelDlVisible(false);
         setBadge('ready', `Engine: ${s.engine} · ${(s.size / 1e6).toFixed(1)} MB`);
         if (engineNote.textContent.startsWith('Last LLM load failed')) {
           engineNote.textContent = '';
           engineNote.classList.remove('error');
         }
       } else if (s.exists && s.loading) {
+        setModelDlVisible(false);
         setBadge('loading', 'Loading LLM engine locally…');
         repollMs = 2000;
       } else if (s.exists) {
+        setModelDlVisible(false);
         setBadge('warn', 'LLM not loaded yet - it loads on first translation');
         // Surface the last load failure (if any) instead of badge-shrugging.
         if (s.loadError) {
@@ -261,7 +273,8 @@
         }
         repollMs = 3000;
       } else {
-        setBadge('warn', 'Engine: LLM unavailable - run `npm run download-model`');
+        setBadge('warn', 'Engine: LLM unavailable - download the model below');
+        setModelDlVisible(true);
         repollMs = 10000;
       }
     } catch (e) {
@@ -577,6 +590,46 @@
   runBtn.addEventListener('click', run);
 
   window.api.onLog(({ line }) => log(line));
+  window.api.onModelDownload((p) => {
+    if (!p) return;
+    if (p.state === 'complete') {
+      barModel.style.width = '100%';
+      modelDlStatus.textContent = 'Download complete - engine starting…';
+      log('model download complete, engine starting…');
+      setTimeout(refreshStatus, 1500);
+    } else if (p.state === 'error') {
+      modelDlBtn.disabled = false;
+      modelDlStatus.textContent = 'Download failed - try again.';
+      showBanner('Model download failed: ' + (p.error || 'unknown error'));
+    } else if (typeof p.pct === 'number') {
+      const pct = Math.max(0, Math.min(100, p.pct));
+      barModel.style.width = pct + '%';
+      modelDlStatus.textContent = p.total > 0
+        ? `${(p.done / 1e6).toFixed(0)} / ${(p.total / 1e6).toFixed(0)} MB (${Math.floor(pct)}%)`
+        : `${(p.done / 1e6).toFixed(0)} MB downloaded`;
+    }
+  });
+  if (modelDlBtn) modelDlBtn.addEventListener('click', async () => {
+    modelDlBtn.disabled = true;
+    clearError();
+    modelDlBarWrap.hidden = false;
+    barModel.style.width = '0%';
+    modelDlStatus.textContent = 'Starting download… (resumes if interrupted)';
+    log('downloading AI model (~1.3 GB, one-time)…');
+    try {
+      const res = await window.api.downloadModel();
+      if (!res || res.ok === false) {
+        modelDlBtn.disabled = false;
+        modelDlStatus.textContent = 'Download failed - try again.';
+        showBanner('Model download failed: ' + ((res && res.error) || 'unknown error'));
+      }
+      // Success is handled via the done progress event above.
+    } catch (e) {
+      modelDlBtn.disabled = false;
+      modelDlStatus.textContent = 'Download failed - try again.';
+      showBanner('Model download failed: ' + ((e && e.message ? e.message : e) || 'unknown error'));
+    }
+  });
   window.api.onProgress((p) => {
     if (!p) return;
     if (p.done) {

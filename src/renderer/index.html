@@ -28,6 +28,18 @@
 </header>
 
 <main>
+  <section id="modelDl" class="card model-dl" hidden>
+    <div class="model-dl-row">
+      <div class="model-dl-text">
+        <strong>AI model not downloaded yet</strong>
+        <span class="hint">One-time download (~1.3 GB). The app is fully offline after that.</span>
+      </div>
+      <button id="modelDlBtn" type="button" class="primary">Download AI model</button>
+    </div>
+    <div class="progress" hidden id="modelDlBarWrap"><div id="barModel"></div></div>
+    <span id="modelDlStatus" class="progress-status"></span>
+  </section>
+
   <section id="dropzone" class="card" tabindex="0" aria-label="Drag and drop video area">
     <div class="dz-inner">
       <div class="dz-icon">📥</div>

@@ -42,6 +42,29 @@ runs the preflight checks, and verifies the native binary loads.
 The model downloads automatically on first install via `postinstall`
 (`npm run download-model` anytime).
 
+## Windows installer
+
+```cmd
+npm run fetch-vc-redist
+npm run dist:win
+```
+
+This builds a per-user NSIS installer (`PlainFFmpeg-Setup-*.exe`) and a
+portable exe (`PlainFFmpeg-Portable-*.exe`) in `dist/`. The installer is
+thin: the ~1.3 GB model is not bundled. On first launch the app shows a
+Download card and fetches the model itself (resumable, with progress),
+then works fully offline. Installed copies keep the model in the per-user
+app data folder, so no admin rights are needed.
+
+Notes:
+
+- `fetch-vc-redist` downloads the Microsoft C++ runtime so the installer
+  can set it up silently (the local AI engine needs it on stock Windows).
+- Windows releases are also built by CI (`.github/workflows/release-win.yml`,
+  manual run or a `v*` tag) and uploaded as artifacts.
+- Unsigned builds trigger a Windows SmartScreen warning on first run -
+  expected until releases are code-signed.
+
 ## Scripts
 
 | Command                | What it does                                              |
@@ -49,7 +72,9 @@ The model downloads automatically on first install via `postinstall`
 | `npm start`            | Launch the app                                            |
 | `npm test`             | Syntax-check every JS file                                |
 | `npm run test:headless`| Full headless suite (no GUI, no model needed)             |
-| `npm run download-model` | (Re)download the GGUF model into `models/`             |
+| `npm run download-model` | (Re)download the GGUF model into `models/` (resumable) |
+| `npm run fetch-vc-redist` | Fetch the MSVC redist into `assets/` (build-time only) |
+| `npm run dist:win` | Build the Windows installer + portable exe into `dist/` |
 | `npm run install:win`  | Windows-safe install with preflight checks                |
 
 ## Project layout

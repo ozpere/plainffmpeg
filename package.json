@@ -7,9 +7,12 @@
   "scripts": {
     "start": "electron .",
     "download-model": "node scripts/download-model.js",
+    "fetch-vc-redist": "node scripts/fetch-vc-redist.js",
     "install:win": "node scripts/install-windows.js",
+    "dist": "electron-builder --publish never",
+    "dist:win": "electron-builder --win nsis portable --publish never",
     "postinstall": "node scripts/download-model.js --check-only || npm run download-model",
-    "test": "node --check src/main.js && node --check src/preload.js && node --check src/renderer/renderer.js && node --check scripts/download-model.js && node --check scripts/install-windows.js && node --check scripts/smoke-test.js && echo \"syntax OK\"",
+    "test": "node --check src/main.js && node --check src/preload.js && node --check src/renderer/renderer.js && node --check scripts/download-model.js && node --check scripts/fetch-vc-redist.js && node --check scripts/install-windows.js && node --check scripts/smoke-test.js && echo \"syntax OK\"",
     "test:headless": "node scripts/smoke-test.js"
   },
   "dependencies": {
@@ -18,7 +21,47 @@
     "node-llama-cpp": "^3.8.0"
   },
   "devDependencies": {
-    "electron": "^33.0.0"
+    "electron": "^33.0.0",
+    "electron-builder": "^25.1.8"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "build": {
+    "appId": "com.ozpere.plainffmpeg",
+    "productName": "PlainFFmpeg",
+    "directories": {
+      "output": "dist",
+      "buildResources": "assets"
+    },
+    "files": [
+      "src/**/*",
+      "scripts/download-model.js",
+      "assets/logo.png",
+      "assets/icon.ico",
+      "assets/icon.icns",
+      "package.json"
+    ],
+    "asar": true,
+    "asarUnpack": [
+      "node_modules/@node-llama-cpp/**/*",
+      "node_modules/ffmpeg-static/**/*"
+    ],
+    "npmRebuild": false,
+    "win": {
+      "icon": "assets/icon.ico",
+      "target": [
+        { "target": "nsis", "arch": ["x64"] },
+        { "target": "portable", "arch": ["x64"] }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "PlainFFmpeg-Setup-${version}.exe",
+      "include": "assets/vc-redist.nsh"
+    },
+    "portable": {
+      "artifactName": "PlainFFmpeg-Portable-${version}.exe"
+    }
+  }
 }

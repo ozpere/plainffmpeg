@@ -105,35 +105,45 @@ const SYSTEM_PROMPT = [
 function resolveModelPath() {
   // MODEL_PATH env override (custom location; also used by smoke tests).
   if (process.env.MODEL_PATH) return process.env.MODEL_PATH;
-  const candidates = [
-    // downloaded model location (dev)
-    path.join(__dirname, '..', 'models', 'model.gguf'),
+  // Packaged installs cannot write inside app.asar - the model lives in the
+  // per-user data dir there (and first-launch downloads go to it as well).
+  const names = [
+    'model.gguf',
+    'Qwen_Qwen3-1.7B-Q4_K_M.gguf',
+    'Qwen3-1.7B-Q4_K_M.gguf',
+    // Previous generation - keep working for users who already downloaded it.
+    'Qwen2.5-Coder-1.5B-Instruct-Q4_K_M.gguf',
   ];
+  const dirs = [];
+  const userDir = userDataModelsDir();
+  if (userDir) dirs.push(userDir);
+  dirs.push(path.join(__dirname, '..', 'models'));
   try {
     // app.getAppPath() only exists inside Electron runtime
     if (isElectron && app && typeof app.getAppPath === 'function') {
       const appPath = app.getAppPath();
-      if (appPath) candidates.push(path.join(appPath, 'models', 'model.gguf'));
+      if (appPath) dirs.push(path.join(appPath, 'models'));
     }
   } catch { /* ignore: required outside Electron (smoke tests) */ }
-  for (const p of candidates) {
-    try {
-      if (p && fs.existsSync(p) && fs.statSync(p).size > 1024) return p;
-    } catch { /* ignore */ }
+  for (const d of dirs) {
+    for (const n of names) {
+      try {
+        const p = path.join(d, n);
+        if (fs.existsSync(p) && fs.statSync(p).size > 1024) return p;
+      } catch { /* ignore */ }
+    }
   }
-  // Also accept the raw Qwen filename as an alias, then treat it as model.gguf
-  const aliases = [
-    path.join(__dirname, '..', 'models', 'Qwen_Qwen3-1.7B-Q4_K_M.gguf'),
-    path.join(__dirname, '..', 'models', 'Qwen3-1.7B-Q4_K_M.gguf'),
-    // Previous generation - keep working for users who already downloaded it.
-    path.join(__dirname, '..', 'models', 'Qwen2.5-Coder-1.5B-Instruct-Q4_K_M.gguf'),
-  ];
-  for (const p of aliases) {
-    try {
-      if (fs.existsSync(p)) return p;
-    } catch { /* ignore */ }
-  }
-  return candidates[0];
+  return path.join(dirs[0], names[0]);
+}
+
+// Writable per-user models dir for packaged installs (null in plain Node).
+function userDataModelsDir() {
+  try {
+    if (isElectron && app && typeof app.getPath === 'function') {
+      return path.join(app.getPath('userData'), 'models');
+    }
+  } catch { /* ignore */ }
+  return null;
 }
 
 let llamaInitPromise = null;
@@ -275,6 +285,62 @@ async function getLlamaSession() {
     llamaInitPromise = null;
     llamaLoadError = err && err.message ? err.message : String(err);
     throw err;
+  }
+}
+
+// First-launch model fetch (thin installer): resumable download into the
+// resolved model path with progress events to the renderer. Concurrent calls
+// share one flight. Errors are returned, never thrown to the UI as a crash.
+let modelDownloadPromise = null;
+
+async function handleDownloadModel(event) {
+  if (modelDownloadPromise) return modelDownloadPromise;
+  modelDownloadPromise = (async () => {
+    const dest = resolveModelPath();
+    try { fs.mkdirSync(path.dirname(dest), { recursive: true }); } catch { /* ignore */ }
+    const sender = event && event.sender;
+    const emit = (payload) => {
+      try {
+        if (sender && !sender.isDestroyed()) sender.send('model-download-progress', payload);
+      } catch { /* window closed */ }
+    };
+    let downloader;
+    try {
+      // Shipped inside the packaged app (see package.json build.files).
+      downloader = require(path.join(__dirname, '..', 'scripts', 'download-model.js'));
+    } catch (e) {
+      throw new Error('model downloader not available in this install.');
+    }
+    const onProgress = ({ done, total }) => emit({
+      state: 'downloading',
+      done,
+      total,
+      pct: total > 0 ? Math.min(99, (done / total) * 100) : null,
+    });
+    let lastErr = null;
+    for (const url of downloader.SOURCES) {
+      try {
+        emit({ state: 'downloading', url, done: 0, total: 0, pct: null });
+        const { bytes } = await downloader.downloadTo(url, dest, { onProgress });
+        if (bytes < (downloader.MIN_BYTES || 0)) {
+          throw new Error(`downloaded file smaller than expected (${bytes} bytes).`);
+        }
+        emit({ state: 'complete', done: bytes, total: bytes, pct: 100 });
+        preloadLlm(); // warm the engine so the badge flips to ready on its own
+        return { ok: true, path: dest, size: bytes };
+      } catch (err) {
+        lastErr = err;
+      }
+    }
+    const message = lastErr && lastErr.message ? lastErr.message : String(lastErr);
+    console.error('[main] model download failed:', message);
+    emit({ state: 'error', error: message });
+    return { ok: false, error: message };
+  })();
+  try {
+    return await modelDownloadPromise;
+  } finally {
+    modelDownloadPromise = null;
   }
 }
 
@@ -1115,6 +1181,7 @@ async function handleRunFfmpeg(event, { args, outputFile }) {
 if (isElectron && ipcMain) {
   ipcMain.handle('model-status', async () => handleModelStatus());
   ipcMain.handle('translate-prompt', async (_e, payload) => handleTranslatePrompt(payload || {}));
+  ipcMain.handle('download-model', async (event) => handleDownloadModel(event));
   ipcMain.handle('pick-file', async () => handlePickFile());
   ipcMain.handle('pick-output', async (_e, payload) => handlePickOutput(payload || {}));
   ipcMain.handle('output-exists', async (_e, outputPath) => handleOutputExists(outputPath));
@@ -1139,6 +1206,8 @@ module.exports = {
   probeMedia,
   enforceOutputExtension,
   resolveModelPath,
+  userDataModelsDir,
+  handleDownloadModel,
   defaultOutputPath,
   handleModelStatus,
   handleTranslatePrompt,

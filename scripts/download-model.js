@@ -31,15 +31,43 @@ function exists(p) {
   }
 }
 
-async function download(url, dest) {
+async function downloadTo(url, dest, { onProgress } = {}) {
   console.log(`[download-model] fetching ${url}`);
-  const res = await fetch(url, { redirect: 'follow' });
-  if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText} for ${url}`);
-  const total = Number(res.headers.get('content-length') || 0);
-  fs.mkdirSync(path.dirname(dest), { recursive: true });
   const tmp = dest + '.part';
-  const file = fs.createWriteStream(tmp);
-  let done = 0;
+  // Resume a previous partial download when the server honors ranges.
+  let start = 0;
+  try {
+    const st = fs.statSync(tmp);
+    if (st.isFile() && st.size > 0) start = st.size;
+  } catch { /* no partial file - start from zero */ }
+  const headers = {};
+  if (start > 0) headers.Range = `bytes=${start}-`;
+  const res = await fetch(url, { redirect: 'follow', headers });
+  if (res.status === 416) {
+    // Range unsatisfiable (remote file changed) - restart from zero.
+    try { fs.rmSync(tmp, { force: true }); } catch { /* ignore */ }
+    return downloadTo(url, dest, { onProgress });
+  }
+  if (res.status !== 200 && res.status !== 206) {
+    throw new Error(`HTTP ${res.status} ${res.statusText} for ${url}`);
+  }
+  let resume = res.status === 206;
+  if (!resume && start > 0) {
+    // Server ignored Range - restarting avoids a corrupt splice.
+    try { fs.rmSync(tmp, { force: true }); } catch { /* ignore */ }
+    start = 0;
+  }
+  const remaining = Number(res.headers.get('content-length') || 0);
+  const total = remaining > 0 ? start + remaining : 0;
+  fs.mkdirSync(path.dirname(dest), { recursive: true });
+  const file = fs.createWriteStream(tmp, { flags: resume && start > 0 ? 'a' : 'w' });
+  let done = start;
+  const report = () => {
+    if (typeof onProgress === 'function') {
+      try { onProgress({ done, total }); } catch { /* progress must never break the download */ }
+    }
+  };
+  report();
   const reader = res.body.getReader();
   for (;;) {
     const { done: end, value } = await reader.read();
@@ -49,11 +77,13 @@ async function download(url, dest) {
     if (total && done % (50 * 1024 * 1024) < value.length) {
       console.log(`[download-model] ${(done / 1e6).toFixed(1)} / ${(total / 1e6).toFixed(1)} MB`);
     }
+    report();
   }
   await new Promise((resolve) => file.close(resolve));
   fs.renameSync(tmp, dest);
   console.log(`[download-model] saved ${dest} (${(done / 1e6).toFixed(1)} MB)`);
-  return done;
+  report();
+  return { bytes: done, total };
 }
 
 async function main() {
@@ -75,7 +105,7 @@ async function main() {
   let lastErr = null;
   for (const url of SOURCES) {
     try {
-      const bytes = await download(url, TARGET);
+      const { bytes } = await downloadTo(url, TARGET);
       if (bytes < MIN_BYTES) {
         console.warn(`[download-model] WARNING: file smaller than expected (${bytes} bytes).`);
       }
@@ -100,4 +130,4 @@ if (require.main === module) {
     process.exit(1);
   });
 }
-module.exports = { TARGET, ALIAS, SOURCES };
+module.exports = { TARGET, ALIAS, SOURCES, MIN_BYTES, downloadTo };

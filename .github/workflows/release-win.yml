@@ -1,0 +1,36 @@
+name: release-win
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+jobs:
+  build-win:
+    runs-on: windows-latest
+    env:
+      # CPU-only LLM binaries (skip the Vulkan dead end) + no ~1.3 GB model
+      # fetch during install (thin installer - the app downloads it on first
+      # launch instead).
+      NODE_LLAMA_CPP_GPU: 'false'
+      SKIP_MODEL_DOWNLOAD: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Fetch MSVC redist for the installer
+        run: npm run fetch-vc-redist
+      - name: Install (Windows-safe)
+        run: npm run install:win
+      - name: Syntax checks
+        run: npm test
+      - name: Headless suite
+        run: npm run test:headless
+      - name: Build installer + portable
+        run: npm run dist:win
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: PlainFFmpeg-windows
+          path: dist/*.exe

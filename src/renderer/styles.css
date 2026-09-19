@@ -114,6 +114,13 @@ label { font-size: 13px; font-weight: 600; color: var(--muted); }
 .file-label { color: var(--muted); font-size: 12.5px; word-break: break-all; }
 .file-label.loaded { color: var(--sage); font-weight: 600; }
 
+/* first-launch model download card */
+.model-dl { padding: 13px 15px; display: grid; gap: 9px; }
+.model-dl[hidden] { display: none; }
+.model-dl-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.model-dl-text { display: grid; gap: 2px; min-width: 0; }
+#barModel { height: 100%; width: 0; border-radius: 999px; transition: width 0.25s; background: var(--accent); }
+
 /* inputs & buttons */
 #instruction, #outputPath {
   width: 100%; padding: 11px 13px; border-radius: 6px;
