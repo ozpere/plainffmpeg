@@ -34,6 +34,10 @@ jobs:
         with:
           name: PlainFFmpeg-windows
           path: dist/*.exe
+          # Tag runs attach the files to a permanent Release instead (release
+          # assets do not consume Actions storage); keep those artifacts only
+          # as a one-day safety buffer. Manual runs keep 14 days for testing.
+          retention-days: ${{ github.ref_type == 'tag' && 1 || 14 }}
 
   build-linux:
     runs-on: ubuntu-22.04
@@ -57,3 +61,21 @@ jobs:
         with:
           name: PlainFFmpeg-linux
           path: dist/*.AppImage
+          retention-days: ${{ github.ref_type == 'tag' && 1 || 14 }}
+
+  # Automatic Release, tag runs only (manual runs never publish).
+  publish-release:
+    needs: [build-win, build-linux]
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: release-assets/*
+          generate_release_notes: true

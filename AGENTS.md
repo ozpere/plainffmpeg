@@ -85,7 +85,7 @@ Order is fixed in `handleTranslatePrompt`:
 
 - `install-windows.js` forces `NODE_LLAMA_CPP_GPU=false` (skips Vulkan dead end), enables `git core.longpaths true`, warns if project path is long (use `C:\plainffmpeg`), checks MSVC DLLs, verifies native binary loads with dynamic `import()`.
 - `SKIP_MODEL_DOWNLOAD=1` skips the ~1 GB fetch for offline/CI smoke runs.
-- Windows releases (`.github/workflows/release.yml`, manual or `v*` tag): `fetch-vc-redist`, `install:win`, checks, `dist:win`, upload exes. Linux AppImage (`dist:linux`) builds in the same workflow on `ubuntu-22.04`. electron-builder config lives in `package.json` (`build`): NSIS per-user + portable x64, AppImage x64, `asarUnpack` for `@node-llama-cpp` and `ffmpeg-static`, `npmRebuild: false`, NSIS `include` runs the bundled `vc_redist` silently. The unsigned build triggers SmartScreen; signing is a future paid step.
+- Windows releases (`.github/workflows/release.yml`, manual or `v*` tag): `fetch-vc-redist`, `install:win`, checks, `dist:win`, upload exes (artifacts expire via `retention-days`: 14 manual, 1 on tags). Linux AppImage (`dist:linux`) builds in the same workflow on `ubuntu-22.04`. Tag pushes additionally publish a permanent Release (`publish-release` job, tag-only gate); manual runs never publish. electron-builder config lives in `package.json` (`build`): NSIS per-user + portable x64, AppImage x64, `asarUnpack` for `@node-llama-cpp` and `ffmpeg-static`, `npmRebuild: false`, NSIS `include` runs the bundled `vc_redist` silently. The unsigned build triggers SmartScreen; signing is a future paid step.
 
 ## Adding a fixup
 

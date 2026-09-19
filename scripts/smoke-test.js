@@ -21,7 +21,6 @@ const required = [
   'assets/vc-redist.nsh',
   '.github/workflows/release.yml',
 ];
-
 async function main() {
   for (const f of required) {
     assert.ok(fs.existsSync(path.join(__dirname, '..', f)), `missing file: ${f}`);
@@ -450,6 +449,12 @@ async function main() {
   const linuxTargets = (pkg.build.linux && pkg.build.linux.target) || [];
   assert.ok(linuxTargets.some((t) => t.target === 'AppImage'), 'linux build must produce an AppImage');
   assert.ok(pkg.scripts['dist:linux'], 'linux dist script must exist');
+  // release workflow: bounded artifacts (500 MB account quota) + automatic
+  // Releases on tags only, never on manual runs
+  const workflow = fs.readFileSync(path.join(__dirname, '../.github/workflows/release.yml'), 'utf8');
+  assert.ok(workflow.includes('retention-days'), 'artifacts must expire instead of piling up');
+  assert.ok(workflow.includes('softprops/action-gh-release'), 'tags must publish a Release');
+  assert.ok(workflow.includes("github.ref_type == 'tag'"), 'publishing must be tag-only');
   assert.strictEqual(typeof mainMod.handleDownloadModel, 'function');
   assert.strictEqual(typeof mainMod.userDataModelsDir, 'function');
   assert.strictEqual(typeof mainMod.appDataModelsDir, 'function');
