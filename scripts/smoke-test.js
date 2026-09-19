@@ -307,6 +307,8 @@ async function main() {
   for (const f of ['src/renderer/renderer.js', 'src/renderer/index.html']) {
     const content = fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
     assert.ok(!content.includes('window.alert'), `${f} must not use native alerts`);
+    assert.ok(!content.includes('window.confirm') && !content.includes('confirm('), `${f} must not use native confirms`);
+    assert.ok(!content.includes('window.prompt') && !content.includes('prompt('), `${f} must not use native prompts`);
   }
   assert.ok(renderer.includes('prettyLlmError'), 'known errors must be translated to plain language');
   assert.ok(renderer.includes('raw LLM output (truncated)'), 'failures must log the raw model output');
@@ -327,6 +329,10 @@ async function main() {
   // preload/renderer reference matching IPC channels + error UI
   for (const ch of ['translatePrompt', 'runFfmpeg', 'modelStatus', 'pickFile', 'pickOutput', 'probeMedia', 'outputExists', 'saveDroppedFile', 'openPath', 'downloadModel', 'windowMin', 'windowMax', 'windowClose']) {
     assert.ok(preload.includes(ch), `preload missing ${ch}`);
+  }
+  // Mirror direction: every exposed relay must have a real handler in main.
+  for (const ch of ['model-status', 'translate-prompt', 'download-model', 'pick-file', 'pick-output', 'output-exists', 'save-dropped-file', 'open-path', 'window-min', 'window-max', 'window-close', 'probe-media', 'run-ffmpeg']) {
+    assert.ok(mainSrc.includes(`ipcMain.handle('${ch}'`), `main missing handler ${ch}`);
   }
   assert.ok(!preload.includes('confirmOverwrite'), 'native confirm dialog must be gone (in-app modal instead)');
   assert.ok(html.includes('errorBanner'), 'UI must have an error banner');
@@ -403,6 +409,11 @@ async function main() {
   const dropPath = await mainMod.handleSaveDroppedFile({ name: 'clip.mp4', buffer: dropBytes });
   assert.strictEqual(fs.readFileSync(dropPath).toString(), 'fake-video-bytes', 'dropped bytes round-trip');
   fs.rmSync(dropPath, { force: true });
+  await assert.rejects(
+    mainMod.handleSaveDroppedFile({ name: 'big.mp4', buffer: Buffer.alloc(600 * 1024 * 1024) }),
+    /too large/,
+    'drops over 500 MB must be rejected in main too'
+  );
   try { fs.rmdirSync(path.dirname(dropPath)); } catch { /* keep temp dir */ }
   const owTmp = path.join(__dirname, 'smoke-out.tmp');
   fs.writeFileSync(owTmp, 'x');
@@ -597,7 +608,8 @@ async function main() {
   const bannedDash = String.fromCharCode(0x2014);
   for (const f of ['src/main.js', 'src/preload.js', 'src/renderer/index.html',
     'src/renderer/renderer.js', 'src/renderer/styles.css', 'package.json',
-    'scripts/download-model.js', 'scripts/fetch-vc-redist.js', 'scripts/install-windows.js']) {
+    'scripts/download-model.js', 'scripts/fetch-vc-redist.js', 'scripts/install-windows.js',
+    'assets/vc-redist.nsh', '.github/workflows/release.yml']) {
     const content = fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
     assert.ok(!content.includes(bannedDash), `${f} must not contain em-dashes`);
   }
@@ -665,6 +677,7 @@ async function main() {
   assert.ok(/\.btn-row\s*{[^}]*justify-content:\s*center/.test(css), 'action buttons must be centered');
   assert.ok(renderer.includes('pathsFromUriList'), 'drop must fall back to text/uri-list');
   assert.ok(renderer.includes('probeMedia'), 'renderer must probe media at load');
+  assert.ok(renderer.includes('/^\\/([A-Za-z]:\\/)/'), 'uri-list drops must strip the slash before drive letters');
   assert.ok(renderer.includes('toFileUrl'), 'preview URLs must be safely encoded');
   assert.ok(renderer.includes('preview.src = toFileUrl(p)'), 'preview must use encoded URLs');
   assert.ok(renderer.includes('Load a video first'), 'translate must require a loaded video');

@@ -914,6 +914,12 @@ async function handleOpenPath({ dirPath } = {}) {
 // the renderer sends the bytes and we materialize a temp copy.
 async function handleSaveDroppedFile({ name, buffer } = {}) {
   if (!buffer || buffer.byteLength === 0) throw new Error('Empty dropped file.');
+  // Same 500 MB cap as the renderer's importPathlessDrop - direct IPC callers
+  // bypass the renderer check, so the main process enforces it too.
+  const MAX_DROP_BYTES = 500 * 1024 * 1024;
+  if (buffer.byteLength > MAX_DROP_BYTES) {
+    throw new Error(`Dropped file too large (${(buffer.byteLength / 1048576).toFixed(0)} MB) - 500 MB max.`);
+  }
   const dir = path.join(os.tmpdir(), 'plainffmpeg-drops');
   fs.mkdirSync(dir, { recursive: true });
   const safe = String(name || 'dropped-video').replace(/[^\w.\-() ]+/g, '_').slice(-120) || 'dropped-video';

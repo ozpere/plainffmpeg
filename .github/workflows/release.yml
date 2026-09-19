@@ -42,6 +42,7 @@ jobs:
   build-linux:
     runs-on: ubuntu-22.04
     env:
+      NODE_LLAMA_CPP_GPU: 'false'
       SKIP_MODEL_DOWNLOAD: '1'
     steps:
       - uses: actions/checkout@v4

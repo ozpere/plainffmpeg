@@ -16,11 +16,13 @@ const path = require('path');
 
 const DEST = path.join(__dirname, '..', 'assets', 'vc_redist.x64.exe');
 const SOURCE = 'https://aka.ms/vs/17/release/vc_redist.x64.exe';
+// Real file is ~25 MB - anything far smaller is a truncated download.
+const MIN_BYTES = 10 * 1024 * 1024;
 
 async function main() {
   try {
     const st = fs.statSync(DEST);
-    if (st.isFile() && st.size > 1024 * 1024) {
+    if (st.isFile() && st.size > MIN_BYTES) {
       console.log('[fetch-vc-redist] already present, skipping.');
       return;
     }
@@ -28,7 +30,11 @@ async function main() {
   console.log(`[fetch-vc-redist] fetching ${SOURCE}`);
   const res = await fetch(SOURCE, { redirect: 'follow' });
   if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText} for ${SOURCE}`);
-  const file = fs.createWriteStream(DEST);
+  fs.mkdirSync(path.dirname(DEST), { recursive: true });
+  // Write to .part and rename only on success: an interrupted download must
+  // never pass the skip check above as a corrupt exe.
+  const tmp = DEST + '.part';
+  const file = fs.createWriteStream(tmp);
   const reader = res.body.getReader();
   let done = 0;
   for (;;) {
@@ -38,6 +44,11 @@ async function main() {
     await new Promise((resolve, reject) => file.write(value, (e) => (e ? reject(e) : resolve())));
   }
   await new Promise((resolve) => file.close(resolve));
+  if (done < MIN_BYTES) {
+    try { fs.rmSync(tmp, { force: true }); } catch { /* ignore */ }
+    throw new Error(`downloaded file smaller than expected (${done} bytes).`);
+  }
+  fs.renameSync(tmp, DEST);
   console.log(`[fetch-vc-redist] saved ${DEST} (${(done / 1e6).toFixed(1)} MB)`);
 }
 

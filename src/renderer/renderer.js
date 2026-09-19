@@ -510,6 +510,8 @@
       if (/^file:\/\//i.test(line)) {
         let p = line.replace(/^file:\/\/(localhost\/)?/i, '');
         try { p = decodeURI(p); } catch { /* keep raw */ }
+        // file:///C:/... leaves a leading slash in front of the drive letter.
+        p = p.replace(/^\/([A-Za-z]:\/)/, '$1');
         if (/^[A-Za-z]:\//.test(p)) p = p.replace(/\//g, '\\');
         out.push(p);
       } else if (/^[A-Za-z]:[\\/]/.test(line) || line.startsWith('\\\\')) {

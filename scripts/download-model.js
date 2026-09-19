@@ -107,10 +107,13 @@ async function main() {
     try {
       const { bytes } = await downloadTo(url, TARGET);
       if (bytes < MIN_BYTES) {
-        console.warn(`[download-model] WARNING: file smaller than expected (${bytes} bytes).`);
+        // Undersized means truncated/corrupt - remove it so it is never
+        // mistaken for a present model, then try the next source.
+        try { fs.rmSync(TARGET, { force: true }); } catch { /* ignore */ }
+        throw new Error(`file smaller than expected (${bytes} bytes) - removed.`);
       }
       // Canonical path is ./models/model.gguf (what main.js loads).
-      // Do NOT duplicate the ~1.1GB file under its upstream name.
+      // Do NOT duplicate the ~1.3GB file under its upstream name.
       console.log('[download-model] done.');
       return;
     } catch (e) {
