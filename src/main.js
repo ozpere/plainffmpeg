@@ -115,16 +115,33 @@ function resolveModelPath() {
     'Qwen2.5-Coder-1.5B-Instruct-Q4_K_M.gguf',
   ];
   const dirs = [];
-  const userDir = userDataModelsDir();
-  if (userDir) dirs.push(userDir);
-  dirs.push(path.join(__dirname, '..', 'models'));
-  try {
-    // app.getAppPath() only exists inside Electron runtime
-    if (isElectron && app && typeof app.getAppPath === 'function') {
-      const appPath = app.getAppPath();
-      if (appPath) dirs.push(path.join(appPath, 'models'));
-    }
-  } catch { /* ignore: required outside Electron (smoke tests) */ }
+  if (isPortableLaunch()) {
+    // Portable flow, deliberately short: exe-side home, then app data as the
+    // LAST fallback (nothing after it - data must never hide in dev dirs).
+    // Reads use existence (a copy on read-only media still counts); only a
+    // NEW download needs a writable home (see portableDataDir + the consent
+    // gate in handleDownloadModel).
+    const exeModels = path.join(process.env.PORTABLE_EXECUTABLE_DIR, 'PlainFFmpegData', 'models');
+    dirs.push(exeModels);
+    const appData = appDataModelsDir();
+    if (appData && !dirs.includes(appData)) dirs.push(appData);
+  } else {
+    // Preferred write target first (exe-side for portable, else app data),
+    // then every location an existing download could already live in - an
+    // older copy keeps working instead of triggering a re-download.
+    const preferred = userDataModelsDir();
+    if (preferred) dirs.push(preferred);
+    const appData = appDataModelsDir();
+    if (appData && !dirs.includes(appData)) dirs.push(appData);
+    dirs.push(path.join(__dirname, '..', 'models'));
+    try {
+      // app.getAppPath() only exists inside Electron runtime
+      if (isElectron && app && typeof app.getAppPath === 'function') {
+        const appPath = app.getAppPath();
+        if (appPath) dirs.push(path.join(appPath, 'models'));
+      }
+    } catch { /* ignore: required outside Electron (smoke tests) */ }
+  }
   for (const d of dirs) {
     for (const n of names) {
       try {
@@ -136,13 +153,52 @@ function resolveModelPath() {
   return path.join(dirs[0], names[0]);
 }
 
-// Writable per-user models dir for packaged installs (null in plain Node).
+// Writable per-user models dir.
+// Portable builds prefer a folder next to the exe (deleting the folder then
+// removes the 1.3 GB download too - a portable app should leave no trace).
+// Installed copies use the per-user app data dir. Falls back to app data when
+// the exe dir is missing or read-only. Null in plain Node (smoke tests).
 function userDataModelsDir() {
+  const portableBase = portableDataDir();
+  if (portableBase) return path.join(portableBase, 'models');
+  return appDataModelsDir();
+}
+
+// Per-user app data models dir (null in plain Node).
+function appDataModelsDir() {
   try {
     if (isElectron && app && typeof app.getPath === 'function') {
       return path.join(app.getPath('userData'), 'models');
     }
   } catch { /* ignore */ }
+  return null;
+}
+
+// True for portable-launcher runs (electron-builder sets this env var).
+function isPortableLaunch() {
+  return !!process.env.PORTABLE_EXECUTABLE_DIR;
+}
+
+// True when a portable run stores (or would store) the model in app data.
+// Drives the persistent fallback notice in the UI.
+function portableFallbackActive() {
+  if (!isPortableLaunch()) return false;
+  const appData = appDataModelsDir();
+  if (!appData) return false;
+  return resolveModelPath().startsWith(appData + path.sep);
+}
+
+// Exe-side data dir for portable launches (set by the portable launcher), or
+// null when it cannot be used. Never creates anything - the downloader makes
+// the dir when a download actually starts.
+function portableDataDir() {
+  try {
+    const exeDir = process.env.PORTABLE_EXECUTABLE_DIR;
+    if (!exeDir) return null;
+    if (!fs.statSync(exeDir).isDirectory()) return null;
+    fs.accessSync(exeDir, fs.constants.W_OK);
+    return path.join(exeDir, 'PlainFFmpegData');
+  } catch { /* not usable - fall back to app data */ }
   return null;
 }
 
@@ -293,10 +349,27 @@ async function getLlamaSession() {
 // share one flight. Errors are returned, never thrown to the UI as a crash.
 let modelDownloadPromise = null;
 
-async function handleDownloadModel(event) {
+async function handleDownloadModel(event, payload) {
   if (modelDownloadPromise) return modelDownloadPromise;
   modelDownloadPromise = (async () => {
-    const dest = resolveModelPath();
+    // Consent gate: a portable that cannot write next to its exe would store
+    // 1.3 GB in app data, where deleting the portable folder leaves it
+    // behind. That write needs explicit confirmation - refuse without it.
+    const consent = !!(payload && payload.consent);
+    let dest = resolveModelPath();
+    if (isPortableLaunch() && portableDataDir() === null) {
+      const appData = appDataModelsDir();
+      const fallbackDest = appData ? path.join(appData, 'model.gguf') : dest;
+      if (!consent) {
+        return {
+          ok: false,
+          needsConsent: true,
+          dest: fallbackDest,
+          error: 'Portable folder is not writable - storing the model in app data needs confirmation.',
+        };
+      }
+      dest = fallbackDest;
+    }
     try { fs.mkdirSync(path.dirname(dest), { recursive: true }); } catch { /* ignore */ }
     const sender = event && event.sender;
     const emit = (payload) => {
@@ -648,6 +721,8 @@ function handleModelStatus() {
     ffmpegPath: ffmpegPath || null,
     engine,
     ready,
+    portable: isPortableLaunch(),
+    fallbackToAppData: portableFallbackActive(),
   };
 }
 
@@ -790,6 +865,26 @@ function handleOutputExists(outputPath) {
   } catch {
     return false;
   }
+}
+
+// Reveal a directory in the OS file manager (the "Open folder" button).
+// The directory must exist - use the output's parent dir, not the file.
+async function handleOpenPath({ dirPath } = {}) {
+  const dir = String(dirPath || '');
+  if (!dir) throw new Error('No folder to open yet.');
+  let isDir = false;
+  try { isDir = fs.statSync(dir).isDirectory(); } catch { isDir = false; }
+  if (!isDir) throw new Error(`Folder not found: ${dir}`);
+  let shell = null;
+  try {
+    ({ shell } = require('electron'));
+  } catch { /* not running inside Electron */ }
+  if (!shell || typeof shell.openPath !== 'function') {
+    throw new Error('OS file manager unavailable in this context.');
+  }
+  const err = await shell.openPath(dir);
+  if (err) throw new Error(err);
+  return { ok: true, dir };
 }
 
 // Pathless drag import: when the OS exposes file bytes but no path,
@@ -1181,11 +1276,12 @@ async function handleRunFfmpeg(event, { args, outputFile }) {
 if (isElectron && ipcMain) {
   ipcMain.handle('model-status', async () => handleModelStatus());
   ipcMain.handle('translate-prompt', async (_e, payload) => handleTranslatePrompt(payload || {}));
-  ipcMain.handle('download-model', async (event) => handleDownloadModel(event));
+  ipcMain.handle('download-model', async (event, payload) => handleDownloadModel(event, payload || {}));
   ipcMain.handle('pick-file', async () => handlePickFile());
   ipcMain.handle('pick-output', async (_e, payload) => handlePickOutput(payload || {}));
   ipcMain.handle('output-exists', async (_e, outputPath) => handleOutputExists(outputPath));
   ipcMain.handle('save-dropped-file', async (_e, payload) => handleSaveDroppedFile(payload || {}));
+  ipcMain.handle('open-path', async (_e, payload) => handleOpenPath(payload || {}));
   ipcMain.handle('window-min', async () => handleWindowMin());
   ipcMain.handle('window-max', async () => handleWindowMax());
   ipcMain.handle('window-close', async () => handleWindowClose());
@@ -1207,12 +1303,17 @@ module.exports = {
   enforceOutputExtension,
   resolveModelPath,
   userDataModelsDir,
+  appDataModelsDir,
+  portableDataDir,
+  isPortableLaunch,
+  portableFallbackActive,
   handleDownloadModel,
   defaultOutputPath,
   handleModelStatus,
   handleTranslatePrompt,
   handleOutputExists,
   handleSaveDroppedFile,
+  handleOpenPath,
   llamaDiagnostics,
   ffmpegFailureHint,
   handleWindowMin,

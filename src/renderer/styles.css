@@ -156,6 +156,7 @@ button.primary:hover:not(:disabled) { background: #f0a83a; border-color: #f0a83a
 }
 .note { font-size: 12.5px; color: var(--muted); margin: 0; }
 .note.error { color: var(--danger); }
+.note.warn { color: var(--accent); }
 .error-banner {
   background: #2b1714; border: 1px solid #6e2f28;
   color: #f0b3ab; border-radius: 6px; padding: 10px 13px;

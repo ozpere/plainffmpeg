@@ -7,3 +7,9 @@
   File /oname=$PLUGINSDIR\vc_redist.x64.exe "${BUILD_RESOURCES_DIR}\vc_redist.x64.exe"
   ExecWait '"$PLUGINSDIR\vc_redist.x64.exe" /install /quiet /norestart'
 !macroend
+
+; Uninstall must not orphan the 1.3 GB model in the per-user app data dir.
+; (The portable needs no hook: its data lives next to the exe by default.)
+!macro customUnInstall
+  RMDir /r "$APPDATA\PlainFFmpeg"
+!macroend

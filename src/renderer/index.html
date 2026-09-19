@@ -28,6 +28,7 @@
 </header>
 
 <main>
+  <p id="portableNote" class="note warn" hidden></p>
   <section id="modelDl" class="card model-dl" hidden>
     <div class="model-dl-row">
       <div class="model-dl-text">
@@ -51,8 +52,8 @@
   </section>
 
   <section class="prompt-row">
-    <label for="instruction">Instruction</label>
-    <input id="instruction" type="text" placeholder='e.g. "Convert to mkv, trim the last 5 seconds, make it 360p"' />
+    <label for="instruction">Instruction in plain English</label>
+    <input id="instruction" type="text" placeholder='e.g. "Convert to mp4, trim the last 5 seconds, make it 360p"' />
   </section>
 
   <section class="prompt-row">
@@ -60,6 +61,7 @@
     <div class="output-row">
       <input id="outputPath" type="text" readonly placeholder="Defaults to output.ext next to the input after translating" />
       <button id="chooseOutputBtn" type="button">Choose…</button>
+      <button id="openFolderBtn" type="button" disabled>Open folder</button>
     </div>
     <p class="hint">Folder and name are yours - the extension always follows the translated command. We ask before overwriting an existing file.</p>
   </section>

@@ -34,7 +34,7 @@ src/renderer/index.html  UI structure, frameless titlebar, split progress bars, 
 src/renderer/styles.css  Warm-charcoal theme, no gradients
 scripts/download-model.js GGUF fetcher, resumable (TARGET is models/model.gguf, shared by main via downloadTo)
 scripts/fetch-vc-redist.js MSVC redist fetcher for the installer (not committed)
-assets/vc-redist.nsh     NSIS hook: silent MSVC redist install (needs vc_redist.x64.exe beside it at build)
+assets/vc-redist.nsh     NSIS hooks: silent MSVC redist install (`customInstall`, needs vc_redist.x64.exe beside it at build) and model-data cleanup on uninstall (`customUnInstall` removes `%APPDATA%\PlainFFmpeg`)
 .github/workflows/release-win.yml Windows CI: install, checks, dist:win, upload exes
 scripts/install-windows.js CPU-only install helper
 scripts/smoke-test.js    Headless contract, asserts behavior not just syntax
@@ -60,9 +60,10 @@ Order is fixed in `handleTranslatePrompt`:
 - `-y` is forced at run time (`finalArgs.unshift('-y')`). Overwrite consent is asked beforehand via in-app modal.
 - Output extension always follows the translated container (`enforceOutputExtension`, `coerceExt`). `defaultOutputPath` is `output.<ext>` next to input, `output.ext` before translation. Never guess a container.
 - Probe uses `ffmpeg -i` stderr parse (no ffprobe dep). `run-ffmpeg` replaces trailing output token with explicit `outputFile`.
-- `resolveModelPath` honors `MODEL_PATH` env, then per-user data dir (packaged apps cannot write inside app.asar), then `models/model.gguf`, then Qwen alias filenames.
+- `resolveModelPath` honors `MODEL_PATH` env. Portable branch is deliberately short: exe-side `PlainFFmpegData` home, then per-user data dir as the LAST fallback (nothing after it). Other flows: preferred write target, then any dir holding an existing download, then Qwen alias filenames.
 - Thin installer: no `*.gguf` is ever bundled (`build.files` excludes models). First launch shows `#modelDl`; `download-model` IPC streams `model-download-progress` and warms the engine on success.
-- `llamaDiagnostics` + `llamaPrebuiltProbe` must keep working: they turn load failures into a pasteable answer. Keep `handleModelStatus` fields stable: `ready, loading, loadError, exists, size, engine`.
+- `llamaDiagnostics` + `llamaPrebuiltProbe` must keep working: they turn load failures into a pasteable answer. Keep `handleModelStatus` fields stable: `ready, loading, loadError, exists, size, engine, portable, fallbackToAppData`.
+- Portable app-data fallback is consent-gated: `handleDownloadModel` returns `needsConsent` without it, the renderer asks via the themed `confirmDialog` modal, and `#portableNote` stays visible while the fallback is active.
 - Temp drop imports go to `os.tmpdir()/plainffmpeg-drops`, capped at 500 MB.
 
 ## IPC and UI

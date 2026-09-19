@@ -10,6 +10,7 @@
   const instruction = $('instruction');
   const outputPath = $('outputPath');
   const chooseOutputBtn = $('chooseOutputBtn');
+  const openFolderBtn = $('openFolderBtn');
   const translateBtn = $('translateBtn');
   const translateOnlyBtn = $('translateOnlyBtn');
   const runBtn = $('runBtn');
@@ -18,6 +19,7 @@
   const engineNote = $('engineNote');
   const engineBadge = $('engineBadge');
   const confirmOverlay = $('confirmOverlay');
+  const confirmTitle = $('confirmTitle');
   const confirmMsg = $('confirmMsg');
   const confirmOk = $('confirmOk');
   const confirmCancel = $('confirmCancel');
@@ -33,6 +35,7 @@
   const modelDlBarWrap = $('modelDlBarWrap');
   const barModel = $('barModel');
   const modelDlStatus = $('modelDlStatus');
+  const portableNote = $('portableNote');
   const closeBtn = $('closeBtn');
   const titlebar = $('titlebar');
   const terminal = $('terminal');
@@ -131,6 +134,8 @@
     outputPath.placeholder = inputFile
       ? 'Defaults to output.ext next to the input'
       : 'Defaults to output.ext next to the input after translating';
+    // No destination, no folder to open.
+    if (openFolderBtn) openFolderBtn.disabled = !shown.trim();
   }
 
   // Extension the translated command produces ('' if unknown yet).
@@ -162,12 +167,13 @@
     engineBadge.classList.toggle('warn', state === 'warn');
   }
 
-  // In-app overwrite confirm (themed modal, not a native popup).
-  // Resolves true on Overwrite, false on Cancel / Esc / backdrop click.
-  function confirmOverwriteUI(outputPath) {
+  // In-app confirm with dynamic copy (overwrite prompt, storage consent).
+  // Resolves true on action, false on Cancel / Esc / backdrop click.
+  function confirmDialog({ title, message, okLabel }) {
     return new Promise((resolve) => {
-      const dir = dirname(String(outputPath));
-      confirmMsg.textContent = `File "${basename(outputPath)}" already exists in that directory:\n${dir}\n\nOverwrite it?`;
+      confirmTitle.textContent = title;
+      confirmMsg.textContent = message;
+      confirmOk.textContent = okLabel;
       confirmOverlay.hidden = false;
       const done = (v) => {
         confirmOverlay.hidden = true;
@@ -186,6 +192,16 @@
       window.addEventListener('keydown', onKey);
       confirmOverlay.addEventListener('click', onBackdrop);
       try { confirmCancel.focus(); } catch { /* ignore */ }
+    });
+  }
+
+  // In-app overwrite confirm (themed modal, not a native popup).
+  function confirmOverwriteUI(outputPath) {
+    const dir = dirname(String(outputPath));
+    return confirmDialog({
+      title: 'Output already exists',
+      message: `File "${basename(outputPath)}" already exists in that directory:\n${dir}\n\nOverwrite it?`,
+      okLabel: 'Overwrite',
     });
   }
 
@@ -245,6 +261,8 @@
   // Polls until the background LLM load finishes: the badge goes
   // unavailable → loading (red) → ready (green) without blocking the UI.
   // With no model on disk the download card shows instead of dev-only advice.
+  // The resolved model path is logged once so "where is my 1.3 GB" is answerable.
+  let statusLogged = false;
   function setModelDlVisible(v) {
     if (modelDl) modelDl.hidden = !v;
   }
@@ -252,6 +270,19 @@
     let repollMs = 0;
     try {
       const s = await window.api.modelStatus();
+      if (!statusLogged) {
+        statusLogged = true;
+        log(`AI model path: ${s.modelPath || '(unknown)'}${s.exists ? '' : ' (not downloaded yet)'}`);
+      }
+      // Standing notice while a portable run stores data outside its folder.
+      if (portableNote) {
+        if (s.portable && s.fallbackToAppData) {
+          portableNote.textContent = 'Portable note: the exe folder is not writable, so the AI model lives in Windows app data and survives deleting this folder. Path is logged below.';
+          portableNote.hidden = false;
+        } else {
+          portableNote.hidden = true;
+        }
+      }
       if (s.ready) {
         setModelDlVisible(false);
         setBadge('ready', `Engine: ${s.engine} · ${(s.size / 1e6).toFixed(1)} MB`);
@@ -291,7 +322,7 @@
       return null;
     }
     if (!text) {
-      log('Type an instruction first, e.g. "Convert to mkv, trim the last 5 seconds, make it 360p".');
+      log('Type an instruction first, e.g. "Convert to mp4, trim the last 5 seconds, make it 360p".');
       return null;
     }
     clearError();
@@ -565,6 +596,20 @@
   });
 
   translateOnlyBtn.addEventListener('click', translate);
+  if (openFolderBtn) openFolderBtn.addEventListener('click', async () => {
+    const out = effectiveOutput();
+    const dir = out ? dirname(out) : '';
+    if (!dir) {
+      log('No output folder to open yet.');
+      return;
+    }
+    try {
+      await window.api.openPath(dir);
+      log(`opened folder: ${dir}`);
+    } catch (e) {
+      log('could not open folder: ' + (e && e.message ? e.message : e));
+    }
+  });
   minBtn.addEventListener('click', () => { try { window.api.windowMin(); } catch { /* ignore */ } });
   maxBtn.addEventListener('click', async () => {
     try {
@@ -616,18 +661,34 @@
     barModel.style.width = '0%';
     modelDlStatus.textContent = 'Starting download… (resumes if interrupted)';
     log('downloading AI model (~1.3 GB, one-time)…');
-    try {
-      const res = await window.api.downloadModel();
-      if (!res || res.ok === false) {
-        modelDlBtn.disabled = false;
-        modelDlStatus.textContent = 'Download failed - try again.';
-        showBanner('Model download failed: ' + ((res && res.error) || 'unknown error'));
-      }
-      // Success is handled via the done progress event above.
-    } catch (e) {
+    const failDownload = (detail) => {
       modelDlBtn.disabled = false;
       modelDlStatus.textContent = 'Download failed - try again.';
-      showBanner('Model download failed: ' + ((e && e.message ? e.message : e) || 'unknown error'));
+      showBanner('Model download failed: ' + (detail || 'unknown error'));
+    };
+    try {
+      let res = await window.api.downloadModel();
+      if (res && res.needsConsent) {
+        // Consent gate: app-data storage for a portable needs confirmation.
+        modelDlStatus.textContent = 'Waiting for confirmation…';
+        const go = await confirmDialog({
+          title: 'Store model in app data?',
+          message: 'The portable folder is not writable, so the ~1.3 GB AI model would be downloaded to Windows app data instead. Deleting the portable folder will not remove it. The exact path is logged below.',
+          okLabel: 'Download to app data',
+        });
+        if (!go) {
+          modelDlBtn.disabled = false;
+          modelDlStatus.textContent = '';
+          log('model download cancelled - app data storage declined.');
+          return;
+        }
+        modelDlStatus.textContent = 'Starting download… (resumes if interrupted)';
+        res = await window.api.downloadModel({ consent: true });
+      }
+      if (!res || res.ok === false) failDownload(res && res.error);
+      // Success is handled via the done progress event above.
+    } catch (e) {
+      failDownload(e && e.message ? e.message : e);
     }
   });
   window.api.onProgress((p) => {

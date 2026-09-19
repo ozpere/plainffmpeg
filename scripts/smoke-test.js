@@ -316,7 +316,7 @@ async function main() {
   }
 
   // preload/renderer reference matching IPC channels + error UI
-  for (const ch of ['translatePrompt', 'runFfmpeg', 'modelStatus', 'pickFile', 'pickOutput', 'probeMedia', 'outputExists', 'saveDroppedFile', 'downloadModel', 'windowMin', 'windowMax', 'windowClose']) {
+  for (const ch of ['translatePrompt', 'runFfmpeg', 'modelStatus', 'pickFile', 'pickOutput', 'probeMedia', 'outputExists', 'saveDroppedFile', 'openPath', 'downloadModel', 'windowMin', 'windowMax', 'windowClose']) {
     assert.ok(preload.includes(ch), `preload missing ${ch}`);
   }
   assert.ok(!preload.includes('confirmOverwrite'), 'native confirm dialog must be gone (in-app modal instead)');
@@ -440,6 +440,76 @@ async function main() {
   assert.ok(pkg.scripts['dist:win'] && pkg.scripts['fetch-vc-redist'], 'dist scripts must exist');
   assert.strictEqual(typeof mainMod.handleDownloadModel, 'function');
   assert.strictEqual(typeof mainMod.userDataModelsDir, 'function');
+  assert.strictEqual(typeof mainMod.appDataModelsDir, 'function');
+  assert.strictEqual(typeof mainMod.portableDataDir, 'function');
+  // portable data dir: next to the exe when writable, nowhere otherwise
+  delete process.env.PORTABLE_EXECUTABLE_DIR;
+  assert.strictEqual(mainMod.portableDataDir(), null, 'no env means no portable dir');
+  const os = require('os');
+  const pdir = fs.mkdtempSync(path.join(os.tmpdir(), 'pfm-portable-'));
+  try {
+    process.env.PORTABLE_EXECUTABLE_DIR = pdir;
+    assert.strictEqual(mainMod.portableDataDir(), path.join(pdir, 'PlainFFmpegData'));
+    process.env.PORTABLE_EXECUTABLE_DIR = path.join(pdir, 'missing');
+    assert.strictEqual(mainMod.portableDataDir(), null, 'missing exe dir falls back to app data');
+    const notDir = path.join(pdir, 'file.txt');
+    fs.writeFileSync(notDir, 'x');
+    process.env.PORTABLE_EXECUTABLE_DIR = notDir;
+    assert.strictEqual(mainMod.portableDataDir(), null, 'non-directory exe path falls back');
+  } finally {
+    delete process.env.PORTABLE_EXECUTABLE_DIR;
+    fs.rmSync(pdir, { recursive: true, force: true });
+  }
+  assert.ok(mainSrc.includes('PORTABLE_EXECUTABLE_DIR'), 'main must detect portable launches');
+  // portable resolve branch: exe-side home, app data last, nothing after it
+  assert.strictEqual(typeof mainMod.isPortableLaunch, 'function');
+  assert.strictEqual(typeof mainMod.portableFallbackActive, 'function');
+  delete process.env.MODEL_PATH; // bogus override from the failure test above
+  delete process.env.PORTABLE_EXECUTABLE_DIR;
+  assert.strictEqual(mainMod.isPortableLaunch(), false, 'no env means no portable launch');
+  assert.strictEqual(mainMod.portableFallbackActive(), false, 'no fallback outside portable');
+  const phome = fs.mkdtempSync(path.join(os.tmpdir(), 'pfm-home-'));
+  try {
+    process.env.PORTABLE_EXECUTABLE_DIR = phome;
+    assert.strictEqual(mainMod.isPortableLaunch(), true, 'portable launch detected');
+    const exeModels = path.join(phome, 'PlainFFmpegData', 'models');
+    assert.strictEqual(
+      mainMod.resolveModelPath(), path.join(exeModels, 'model.gguf'),
+      'portable default is the exe-side home'
+    );
+    fs.mkdirSync(exeModels, { recursive: true });
+    fs.writeFileSync(path.join(exeModels, 'model.gguf'), Buffer.alloc(2048));
+    assert.strictEqual(mainMod.resolveModelPath(), path.join(exeModels, 'model.gguf'), 'exe-side copy wins');
+    assert.strictEqual(mainMod.portableFallbackActive(), false, 'exe-side home needs no notice');
+    // unwritable exe home + no consent: refuse before touching the network
+    process.env.PORTABLE_EXECUTABLE_DIR = path.join(phome, 'missing');
+    const refused = await mainMod.handleDownloadModel(undefined);
+    assert.strictEqual(refused.ok, false, 'fallback write without consent must refuse');
+    assert.strictEqual(refused.needsConsent, true, 'refusal must flag the consent gate');
+  } finally {
+    delete process.env.PORTABLE_EXECUTABLE_DIR;
+    fs.rmSync(phome, { recursive: true, force: true });
+  }
+  // consent gate + persistent fallback notice in the UI
+  assert.ok(renderer.includes('needsConsent'), 'renderer must handle the consent gate');
+  assert.ok(renderer.includes('confirmDialog'), 'consent must reuse the themed modal');
+  assert.ok(renderer.includes('portableNote'), 'renderer must show the fallback notice');
+  assert.ok(renderer.includes('fallbackToAppData'), 'notice must follow engine status');
+  assert.ok(html.includes('id="portableNote"'), 'UI must have the fallback notice element');
+  // instruction label + example copy, output folder shortcut
+  assert.ok(html.includes('Instruction in plain English'), 'instruction label must stress plain English');
+  assert.ok(html.includes('Convert to mp4,'), 'example copy must use mp4');
+  assert.ok(html.includes('id="openFolderBtn"'), 'UI must have the open-folder button');
+  assert.ok(html.includes('>Open folder<'), 'open-folder button must be labeled');
+  assert.ok(renderer.includes('openFolderBtn'), 'renderer must wire the open-folder button');
+  assert.ok(renderer.includes('No output folder to open yet.'), 'empty output must explain the disabled shortcut');
+  assert.strictEqual(typeof mainMod.handleOpenPath, 'function');
+  await assert.rejects(mainMod.handleOpenPath({}), /No folder/, 'empty path rejected');
+  await assert.rejects(mainMod.handleOpenPath({ dirPath: '/no/such/dir-plainffmpeg' }), /not found/, 'missing dir rejected');
+  const nsh = fs.readFileSync(path.join(__dirname, '../assets/vc-redist.nsh'), 'utf8');
+  assert.ok(nsh.includes('customUnInstall'), 'installer must clean up on uninstall');
+  assert.ok(nsh.includes('RMDir /r "$APPDATA\\PlainFFmpeg"'), 'uninstall must remove the model data dir');
+  assert.ok(renderer.includes('AI model path:'), 'resolved model path must be logged at boot');
   console.log('[smoke] packaging OK');
 
   // resumable downloader: seeded .part file must resume, not restart
@@ -485,6 +555,7 @@ async function main() {
   const css = fs.readFileSync(path.join(__dirname, '../src/renderer/styles.css'), 'utf8');
   assert.ok(css.includes('.model-dl[hidden]'), 'download card must honor hidden');
   assert.ok(css.includes('#barModel'), 'model progress bar must be styled');
+  assert.ok(css.includes('.note.warn'), 'fallback notice must be styled');
   assert.ok(css.includes('max-height: 320px'), 'video preview must be size-capped');
   assert.ok(css.includes('position: sticky'), 'title bar must stay frozen while scrolling');
   assert.ok(/\.badge\.loading\s*{[^}]*#f2b8b0/i.test(css), 'loading badge must be pastel red');
