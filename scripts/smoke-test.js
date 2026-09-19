@@ -489,6 +489,14 @@ async function main() {
   assert.ok(renderer.includes('downloadModel'), 'renderer must wire the model download');
   assert.ok(renderer.includes('onModelDownload'), 'renderer must show download progress');
   assert.ok(renderer.includes('setModelDlVisible'), 'download card must follow engine status');
+  // download card must survive its own partial file and a corrupt model:
+  // success via either the progress event or the invoke result.
+  assert.ok(renderer.includes('modelDownloading'), 'card must track the in-flight download');
+  assert.ok(renderer.includes('modelDownloadDone'), 'progress event and invoke result must share completion');
+  assert.ok(renderer.includes('Re-download replaces the model file'), 'failed load must offer re-download');
+  // time/size requests need the probed duration - never translate blind.
+  assert.ok(renderer.includes('Still reading the video file'), 'probe in flight must block time requests');
+  assert.ok(renderer.includes('duration is unknown'), 'unknown duration must block time requests');
   console.log('[smoke] model download UI OK');
 
   // windows packaging: thin installer (model fetched on first launch)

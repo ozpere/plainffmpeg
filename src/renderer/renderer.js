@@ -42,9 +42,12 @@
 
   let inputFile = null;
   let mediaDuration = null; // seconds, probed at load; resolves "last N seconds"
+  let probing = false;     // probe in flight - duration not trustworthy yet
+  let probeFailed = false; // probe settled without metadata
   let outputFile = null;   // explicit destination; null = use computed default
   let outputManual = false;
   let lastArgs = null;
+  let modelDownloading = false; // model fetch in flight - keep its card up
 
   function log(line) {
     terminal.textContent += line + '\n';
@@ -223,6 +226,8 @@
   function setFile(p) {
     inputFile = p;
     mediaDuration = null;
+    probing = false;
+    probeFailed = false;
     outputManual = false;
     // A new (or cleared) input invalidates the previous translation: keep
     // no stale command, output, or statuses around to run by accident.
@@ -260,17 +265,25 @@
     refreshOutputDisplay();
     // Probe duration/resolution in the background: shown in the label and
     // used to resolve "last N seconds" at translate time.
+    probing = true;
+    probeFailed = false;
     window.api.probeMedia(p).then(
       (meta) => {
+        probing = false;
         if (inputFile !== p || !meta) return;
         mediaDuration = meta.duration;
+        if (!(mediaDuration > 0)) probeFailed = true;
         const bits = [];
         if (meta.duration) bits.push(meta.duration.toFixed(1) + 's');
         if (meta.width && meta.height) bits.push(meta.width + '×' + meta.height);
         if (bits.length > 0) fileLabel.textContent = `✓ Loaded: ${p} (${bits.join(' · ')})`;
         log(`probed: ${bits.join(' · ') || 'no metadata'}`);
       },
-      (err) => log('probe failed: ' + (err && err.message ? err.message : err))
+      (err) => {
+        probing = false;
+        probeFailed = true;
+        log('probe failed: ' + (err && err.message ? err.message : err));
+      }
     );
   }
 
@@ -301,17 +314,27 @@
       }
       if (s.ready) {
         setModelDlVisible(false);
+        modelDownloading = false;
         setBadge('ready', `Engine: ${s.engine} · ${(s.size / 1e6).toFixed(1)} MB`);
         if (engineNote.textContent.startsWith('LLM failed to load') || engineNote.textContent.startsWith('Last LLM load failed')) {
           engineNote.textContent = '';
           engineNote.classList.remove('error');
         }
       } else if (s.exists && s.loading) {
-        setModelDlVisible(false);
+        // A fetch in flight creates its partial file fast - do not yank its
+        // progress card away for a generic "not loaded yet".
+        if (!modelDownloading) setModelDlVisible(false);
         setBadge('loading', 'Loading LLM engine locally…');
         repollMs = 2000;
       } else if (s.exists && s.loadError && !s.loading) {
-        setModelDlVisible(false);
+        // Failed load: keep a way back visible. A corrupt model can be
+        // replaced via re-download; a missing system component cannot.
+        const msvcCase = s.loadErrorKind === 'msvc-missing';
+        setModelDlVisible(!msvcCase);
+        if (!msvcCase) {
+          if (modelDlBtn) modelDlBtn.disabled = false;
+          if (modelDlStatus) modelDlStatus.textContent = 'Translation unavailable - see logs below. Re-download replaces the model file if it is corrupt.';
+        }
         setBadge('error', `Engine: ${s.engine || 'LLM failed to load'}`);
         engineNote.textContent = `LLM failed to load - nothing will translate until this is fixed. ${prettyLlmError(s.loadError)}`;
         engineNote.classList.add('error');
@@ -340,6 +363,13 @@
     }
     if (!text) {
       log('Type an instruction first, e.g. "Convert to mp4, trim the last 5 seconds, make it 360p".');
+      return null;
+    }
+    // Time and size requests are resolved against the probed duration - with
+    // no duration the fixups skip silently and the command would be wrong.
+    if (/last\s+\d|below|under|\bmb\b|\bgb\b|size/i.test(text) && !(mediaDuration > 0)) {
+      if (probing) showBanner('Still reading the video file - wait a moment, then press Translate again.');
+      else showBanner('The video duration is unknown, so time and size requests cannot be applied. See logs for details.');
       return null;
     }
     clearError();
@@ -658,15 +688,22 @@
   });
   runBtn.addEventListener('click', run);
 
-  window.api.onLog(({ line }) => log(line));
+  window.api.onLog((p) => log(p && p.line));
+  // Shared download completion: the progress event is the live path, the
+  // invoke result is the fallback (either one alone must finish the UI).
+  function modelDownloadDone(done, total) {
+    modelDownloading = false;
+    barModel.style.width = '100%';
+    modelDlStatus.textContent = 'Download complete - engine starting…';
+    log('model download complete, engine starting…');
+    setTimeout(refreshStatus, 1500);
+  }
   window.api.onModelDownload((p) => {
     if (!p) return;
     if (p.state === 'complete') {
-      barModel.style.width = '100%';
-      modelDlStatus.textContent = 'Download complete - engine starting…';
-      log('model download complete, engine starting…');
-      setTimeout(refreshStatus, 1500);
+      modelDownloadDone(p.done, p.total);
     } else if (p.state === 'error') {
+      modelDownloading = false;
       modelDlBtn.disabled = false;
       modelDlStatus.textContent = 'Download failed - try again.';
       showBanner('Model download failed: ' + (p.error || 'unknown error'));
@@ -680,12 +717,14 @@
   });
   if (modelDlBtn) modelDlBtn.addEventListener('click', async () => {
     modelDlBtn.disabled = true;
+    modelDownloading = true;
     clearError();
     modelDlBarWrap.hidden = false;
     barModel.style.width = '0%';
     modelDlStatus.textContent = 'Starting download… (resumes if interrupted)';
     log('downloading AI model (~1.3 GB, one-time)…');
     const failDownload = (detail) => {
+      modelDownloading = false;
       modelDlBtn.disabled = false;
       modelDlStatus.textContent = 'Download failed - try again.';
       showBanner('Model download failed: ' + (detail || 'unknown error'));
@@ -701,16 +740,18 @@
           okLabel: 'Download to app data',
         });
         if (!go) {
+          modelDownloading = false;
           modelDlBtn.disabled = false;
           modelDlStatus.textContent = '';
+          modelDlBarWrap.hidden = true;
           log('model download cancelled - app data storage declined.');
           return;
         }
         modelDlStatus.textContent = 'Starting download… (resumes if interrupted)';
         res = await window.api.downloadModel({ consent: true });
       }
-      if (!res || res.ok === false) failDownload(res && res.error);
-      // Success is handled via the done progress event above.
+      if (res && res.ok) modelDownloadDone(res.size || 0, res.size || 0);
+      else failDownload(res && res.error);
     } catch (e) {
       failDownload(e && e.message ? e.message : e);
     }
