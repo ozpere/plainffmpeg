@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; media-src file: blob: data:; img-src 'self' file: data:; object-src 'none';" />
 <title>PlainFFmpeg</title>
 <link rel="stylesheet" href="styles.css" />
 </head>
@@ -24,7 +24,7 @@
       <p class="sub">100% offline · on-device LLM · no cloud, no accounts.</p>
     </div>
   </div>
-  <div id="engineBadge" class="badge" aria-live="polite">checking engine…</div>
+  <div id="engineBadge" class="badge warn" aria-live="polite">checking engine…</div>
 </header>
 
 <main>
@@ -37,7 +37,7 @@
       </div>
       <button id="modelDlBtn" type="button" class="primary">Download AI model</button>
     </div>
-    <div class="progress" hidden id="modelDlBarWrap"><div id="barModel"></div></div>
+    <div class="progress" id="modelDlBarWrap" role="progressbar" aria-label="Model download progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" hidden><div id="barModel"></div></div>
     <span id="modelDlStatus" class="progress-status" aria-live="polite"></span>
   </section>
 
@@ -102,7 +102,7 @@
 <!-- Outside <main> on purpose: the modal parks header/main/titlebar with
      inert while open, which would brick its own buttons from inside. -->
 <div id="confirmOverlay" class="overlay" hidden>
-  <div class="modal" role="alertdialog" aria-modal="true" aria-labelledby="confirmTitle">
+  <div class="modal" role="alertdialog" aria-modal="true" aria-labelledby="confirmTitle" aria-describedby="confirmMsg">
     <h2 id="confirmTitle">Output already exists</h2>
     <p id="confirmMsg"></p>
     <div class="modal-actions">

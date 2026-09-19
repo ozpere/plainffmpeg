@@ -347,6 +347,12 @@ async function main() {
   assert.ok(renderer.includes('LLM failed to load'), 'failed loads must name the failure, not promise a retry');
   assert.ok(!renderer.includes('Last LLM load failed - will retry on first translation'), 'misleading retry line must be gone');
   assert.ok(renderer.includes('showBanner'), 'errors must surface through the themed banner');
+  // empty instruction must be visible, not a hidden log line.
+  assert.ok(renderer.includes("showBanner('Type an instruction first,"), 'empty instruction must banner');
+  // no second flight while one runs: run locks translate, translate locks run.
+  assert.ok(/async function run\(\)[\s\S]{0,3000}?translateBtn\.disabled = true/.test(renderer), 'run must lock translate buttons');
+  assert.ok(renderer.includes('runBtn.disabled = !lastArgs'), 'run availability must follow the translation');
+  assert.ok(renderer.includes('if (!p) return; log(p.line)'), 'log subscriber must guard nulls');
   // main names the same cause in logs and in the banner
   assert.ok(pathsSrc.includes('Visual C++ Redistributable'), 'MSVC hint must name the redistributable');
   assert.ok(mainSrc.includes('msvcRuntimeStatus'), 'main must detect the runtime');
@@ -544,6 +550,8 @@ async function main() {
   assert.ok((pkg.build.files || []).includes('scripts/download-model.js'), 'first-launch downloader must ship in the app');
   assert.strictEqual(pkg.build.nsis && pkg.build.nsis.include, 'assets/vc-redist.nsh', 'installer must bundle the MSVC redist step');
   assert.ok(pkg.scripts['dist:win'] && pkg.scripts['fetch-vc-redist'], 'dist scripts must exist');
+  assert.ok(pkg.scripts['dist:win'].includes('fetch-vc-redist'), 'dist:win must fetch the redist itself');
+  assert.ok(pkg.engines && /24/.test(pkg.engines.node), 'package must declare the Node 24 floor');
   assert.ok(/^\^?44/.test(pkg.devDependencies.electron), 'electron must stay on v44+ (Node 20 is EOL)');
   assert.ok(!pkg.dependencies['fluent-ffmpeg'], 'unmaintained wrapper must stay removed (runner spawns ffmpeg directly)');
   const linuxTargets = (pkg.build.linux && pkg.build.linux.target) || [];
@@ -922,6 +930,10 @@ async function main() {
   assert.ok(html.includes('aria-live="polite"'), 'statuses must announce politely');
   assert.ok(html.includes('role="progressbar"'), 'progress bars must expose role');
   assert.ok(html.includes('aria-valuenow'), 'progress bars must expose values');
+  assert.ok(html.includes('Model download progress'), 'model bar must expose its role too');
+  assert.ok(html.includes('aria-describedby="confirmMsg"'), 'modal must describe its message');
+  assert.ok(html.includes('badge warn'), 'badge must not paint unknown state as ready');
+  assert.ok(html.includes('media-src'), 'CSP must cover the video preview');
   assert.ok(html.includes('aria-hidden="true"'), 'decorative icons must hide');
   assert.ok(renderer.includes('paintBar'), 'bar width and ARIA value must move together');
   assert.ok(renderer.includes('previouslyFocused'), 'modal must restore focus');
@@ -1023,6 +1035,8 @@ async function main() {
   assert.ok(renderer.includes('toFileUrl'), 'preview URLs must be safely encoded');
   assert.ok(renderer.includes('preview.src = toFileUrl(p)'), 'preview must use encoded URLs');
   assert.ok(renderer.includes('UNC share'), 'UNC shares must map to file://server/…');
+  assert.ok(renderer.includes('(localhost)?'), 'localhost file urls must keep their slash');
+  assert.ok(renderer.includes('is a UNC path, not a relative one'), 'uri-list shares must convert to UNC');
   assert.ok(mainSrc.includes('modelStatCache'), 'model stat must be cached between polls');
   assert.ok(renderer.includes('using the first one only'), 'multi-file drops must say what was ignored');
   assert.ok(renderer.includes('preview cannot play this file'), 'preview failures must explain themselves');

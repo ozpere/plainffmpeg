@@ -416,7 +416,7 @@
       return null;
     }
     if (!text) {
-      log('Type an instruction first, e.g. "Convert to mp4, trim the last 5 seconds, make it 360p".');
+      showBanner('Type an instruction first, e.g. "Convert to mp4, trim the last 5 seconds, make it 360p".');
       return null;
     }
     // Time and size requests are resolved against the probed duration - with
@@ -507,6 +507,8 @@
       log('overwrite check unavailable, continuing: ' + (e && e.message ? e.message : e));
     }
     runBtn.disabled = true;
+    translateBtn.disabled = true;
+    translateOnlyBtn.disabled = true;
     paintBar(barFfmpeg, 0);
     ffmpegStatus.textContent = 'Running…';
     log(`running ffmpeg → ${out}…`);
@@ -523,7 +525,10 @@
       terminal.scrollTop = terminal.scrollHeight;
       log('ffmpeg failed: ' + (e && e.message ? e.message : e));
     } finally {
-      runBtn.disabled = false;
+      // A video switched mid-run cleared lastArgs - do not re-enable Run then.
+      runBtn.disabled = !lastArgs;
+      translateBtn.disabled = false;
+      translateOnlyBtn.disabled = false;
     }
   }
 
@@ -608,11 +613,14 @@
       line = line.trim();
       if (!line || line.startsWith('#')) continue;
       if (/^file:\/\//i.test(line)) {
-        let p = line.replace(/^file:\/\/(localhost\/)?/i, '');
+        // Strip the scheme (and a localhost host, keeping its slash).
+        let p = line.replace(/^file:\/\/(localhost)?/i, '');
         try { p = decodeURI(p); } catch { /* keep raw */ }
         // file:///C:/... leaves a leading slash in front of the drive letter.
         p = p.replace(/^\/([A-Za-z]:\/)/, '$1');
         if (/^[A-Za-z]:\//.test(p)) p = p.replace(/\//g, '\\');
+        // file://server/share/... is a UNC path, not a relative one.
+        else if (!p.startsWith('/')) p = '\\\\' + p.replace(/\//g, '\\');
         out.push(p);
       } else if (/^[A-Za-z]:[\\/]/.test(line) || line.startsWith('\\\\')) {
         out.push(line);
@@ -754,7 +762,7 @@
   });
   runBtn.addEventListener('click', run);
 
-  window.api.onLog((p) => log(p && p.line));
+  window.api.onLog((p) => { if (!p) return; log(p.line); });
   // Shared download completion: the progress event is the live path, the
   // invoke result is the fallback (either one alone must finish the UI).
   function modelDownloadDone(done, total) {
