@@ -260,7 +260,12 @@
 
   // file:// URL that survives spaces, unicode, and Windows backslashes.
   function toFileUrl(p) {
-    const parts = String(p).replace(/\\/g, '/').split('/');
+    const s = String(p);
+    if (/^\\\\[^\\]+\\/.test(s)) {
+      // UNC share (\\server\share\dir\file): file://server/share/dir/file.
+      return 'file://' + s.replace(/\\/g, '/').split('/').filter(Boolean).map(encodeURIComponent).join('/');
+    }
+    const parts = s.replace(/\\/g, '/').split('/');
     const encoded = parts
       .map((seg, i) => (i === 0 && /^[A-Za-z]:$/.test(seg) ? seg : encodeURIComponent(seg)))
       .join('/');
@@ -640,6 +645,9 @@
     dropzone.classList.remove('over');
     diagnoseDrop(e);
     const files = filesFromDrop(e);
+    if (files.length > 1) {
+      log(`multiple files dropped - using the first one only (${files.length - 1} ignored).`);
+    }
     if (files.length > 0 && files[0] && files[0].path) {
       log(`drop received: ${files[0].name || files[0].path}`);
       setFile(files[0].path);
@@ -682,6 +690,10 @@
       showBanner('Could not open the file dialog: ' + (e && e.message ? e.message : e));
     }
   });
+  // Async preview failures (unsupported container) never throw above.
+  preview.addEventListener('error', () => {
+    log('preview cannot play this file - translation and conversion still work.');
+  });
 
   chooseOutputBtn.addEventListener('click', async () => {
     const current = effectiveOutput() || defaultOutput();
@@ -715,7 +727,7 @@
       await window.api.openPath(dir);
       log(`opened folder: ${dir}`);
     } catch (e) {
-      log('could not open folder: ' + (e && e.message ? e.message : e));
+      showBanner('Could not open folder: ' + (e && e.message ? e.message : e));
     }
   });
   minBtn.addEventListener('click', () => { try { window.api.windowMin(); } catch { /* ignore */ } });

@@ -981,6 +981,10 @@ async function main() {
   assert.ok(renderer.includes('/^\\/([A-Za-z]:\\/)/'), 'uri-list drops must strip the slash before drive letters');
   assert.ok(renderer.includes('toFileUrl'), 'preview URLs must be safely encoded');
   assert.ok(renderer.includes('preview.src = toFileUrl(p)'), 'preview must use encoded URLs');
+  assert.ok(renderer.includes('UNC share'), 'UNC shares must map to file://server/…');
+  assert.ok(renderer.includes('using the first one only'), 'multi-file drops must say what was ignored');
+  assert.ok(renderer.includes('preview cannot play this file'), 'preview failures must explain themselves');
+  assert.ok(renderer.includes('Could not open folder'), 'open-folder failure must surface');
   assert.ok(renderer.includes('Load a video first'), 'translate must require a loaded video');
   assert.ok(renderer.includes('getAsFile'), 'drop must handle DataTransfer.items');
   assert.ok(renderer.includes('dropEffect'), 'drop must advertise copy effect');
