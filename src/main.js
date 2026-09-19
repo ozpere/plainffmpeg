@@ -297,6 +297,9 @@ function sanitizeModelOutput(raw) {
   // Qwen3 hybrid models may emit a thinking trace despite non-thinking mode -
   // drop it before anything else so only the final answer is parsed.
   text = text.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+  // Orphan thinking tags (unclosed block from a cut-off answer) - strip the
+  // tags themselves so they can never leak into a kept content line.
+  text = text.replace(/<\/?think>/gi, '').trim();
   // Strip markdown fences / backticks the model may add despite the system prompt.
   text = text.replace(/```(?:bash|sh|ffmpeg)?/gi, '').replace(/```/g, '').replace(/`/g, '').trim();
   // Split into lines, strip list markers/bullets/arrows ("- ", "*", "1.", "→").
@@ -426,6 +429,23 @@ function fixupArgs(args) {
         }
         return m;
       });
+    }
+  }
+
+  // Multiple -vf/-filter:v flags: ffmpeg honors only the LAST one, silently
+  // dropping the earlier chains. Merge them into a single comma-joined chain.
+  {
+    const seen = [];
+    for (let i = 0; i < out.length; i++) {
+      if ((out[i] === '-vf' || out[i] === '-filter:v') && typeof out[i + 1] === 'string') {
+        seen.push({ idx: i, val: out[i + 1] });
+      }
+    }
+    if (seen.length > 1) {
+      out[seen[0].idx] = '-vf';
+      out[seen[0].idx + 1] = seen.map((s) => s.val).join(',');
+      for (let k = seen.length - 1; k >= 1; k--) out.splice(seen[k].idx, 2);
+      corrections.push(`Merged ${seen.length} -vf chains into one (ffmpeg keeps only the last -vf)`);
     }
   }
 
@@ -597,12 +617,16 @@ async function handleTranslatePrompt({ instruction, inputFile, duration }) {
     const tokens = tokenizeArgs(cleaned, inputFile);
     const fixed = fixupArgs(tokens);
     const withInput = fixupInput(fixed.args, inputFile);
-    const withTrim = fixupLastTrim(withInput.args, instruction, duration);
+    const withConflicts = fixupConflicts(withInput.args, instruction);
+    // Output placeholder first: trim/size insertions slot in before the
+    // trailing output token, which keeps flag/value pairs adjacent.
+    const withOutput = ensureOutputFile(withConflicts.args, instruction);
+    const withTrim = fixupLastTrim(withOutput.args, instruction, duration);
     const withSize = fixupSizeLimit(withTrim.args, instruction, duration);
-    const withOutput = ensureOutputFile(withSize.args, instruction);
-    const args = withOutput.args;
+    const args = withSize.args;
     const corrections = fixed.corrections.concat(
-      withInput.corrections, withTrim.corrections, withSize.corrections, withOutput.corrections
+      withInput.corrections, withConflicts.corrections, withOutput.corrections, withTrim.corrections,
+      withSize.corrections
     );
     return {
       ok: true,
@@ -816,6 +840,11 @@ function fixupSizeLimit(args, instruction, durationSec) {
     if (baIdx !== -1) {
       const v = parseBitrateBps(out[baIdx + 1]);
       if (v) audioBits = v;
+      if (v && v > 128000) {
+        out[baIdx + 1] = '128k';
+        audioBits = 128000;
+        corrections.push('Size limit: capped `-b:a` at 128k (audio must stay bounded)');
+      }
     }
   }
   const videoBps = Math.max(100000, Math.floor((bytes * 8 * 0.98) / durationSec - audioBits));
@@ -915,6 +944,62 @@ function fixupLastTrim(args, instruction, durationSec) {
   } else if (ssIdx === -1 && tIdx !== -1 && approx(tVal, N)) {
     out.splice(tIdx, 2, '-ss', want);
     corrections.push(`"last ${m[1]}s" of ${fmtSec(durationSec)}s starts at ${want}s - replaced -t with -ss`);
+  }
+  return { args: out, corrections };
+}
+
+// Contradictions ffmpeg rejects outright (or that violate runner contracts):
+// two-pass flags (single-shot runner), audio-codec flags combined with -an,
+// and `-c:v copy` paired with video filters (filtering requires re-encoding).
+// Runs BEFORE size-limit insertions so flag/value pairs are still adjacent
+// (inserting between `-pass` and `1` would orphan the value). The container
+// for the stream-copy fix comes from the instruction words, mirroring
+// ensureOutputFile (whose .mp4 default matches the libx264 default here).
+// Returns { args, corrections } - never throws.
+function fixupConflicts(args, instruction) {
+  const corrections = [];
+  if (!Array.isArray(args)) return { args, corrections };
+  const out = [...args];
+  // Drop a valued flag everywhere it appears. A flag with no consumable value
+  // (end of args, or another flag follows) is dropped alone.
+  const dropValued = (flag, reason) => {
+    let idx = out.findIndex((t) => t === flag);
+    while (idx !== -1) {
+      const nx = out[idx + 1];
+      if (nx === undefined || String(nx).startsWith('-')) {
+        out.splice(idx, 1);
+        corrections.push(`Removed dangling "${flag}" (${reason})`);
+      } else {
+        out.splice(idx, 2);
+        corrections.push(`Removed "${flag} ${nx}" (${reason})`);
+      }
+      idx = out.findIndex((t) => t === flag);
+    }
+  };
+  // Two-pass needs two runner invocations - we only ever run one command.
+  const twoPass = 'two-pass is unsupported, the runner executes a single command';
+  dropValued('-pass', twoPass);
+  dropValued('-passlogfile', twoPass);
+  // Mute contradicts any audio encoding setting.
+  if (out.includes('-an')) {
+    const muted = 'contradicts -an (muted output has no audio stream)';
+    for (const f of ['-c:a', '-b:a', '-ac', '-ar', '-af', '-filter:a']) dropValued(f, muted);
+  }
+  // Stream-copy cannot filter: any video filter requires re-encoding.
+  const hasVideoFilter = out.includes('-vf') || out.includes('-filter:v') || out.includes('-filter_complex');
+  const cvIdx = out.findIndex((t) => t === '-c:v');
+  if (hasVideoFilter && cvIdx !== -1 && String(out[cvIdx + 1]).toLowerCase() === 'copy') {
+    const text = String(instruction || '').toLowerCase();
+    if (/\bwebm\b/.test(text)) {
+      out[cvIdx + 1] = 'libvpx-vp9';
+      corrections.push('Replaced `-c:v copy` with `-c:v libvpx-vp9` (filters cannot stream-copy)');
+    } else if (/\bgif\b/.test(text)) {
+      out.splice(cvIdx, 2);
+      corrections.push('Removed `-c:v copy` (gif output uses its default encoder with filters)');
+    } else {
+      out[cvIdx + 1] = 'libx264';
+      corrections.push('Replaced `-c:v copy` with `-c:v libx264` (filters cannot stream-copy)');
+    }
   }
   return { args: out, corrections };
 }
@@ -1048,6 +1133,7 @@ module.exports = {
   fixupInput,
   fixupLastTrim,
   fixupSizeLimit,
+  fixupConflicts,
   ensureOutputFile,
   parseSizeLimit,
   probeMedia,

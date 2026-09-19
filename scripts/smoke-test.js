@@ -66,6 +66,11 @@ async function main() {
     mainMod.sanitizeModelOutput('<think>line one\nline two</think>-i in.mp4 -c:v libx264 out.mkv'),
     '-i in.mp4 -c:v libx264 out.mkv'
   );
+  // orphan thinking tag from a cut-off answer cannot leak into the command
+  assert.strictEqual(
+    mainMod.sanitizeModelOutput('<think>-i in.mp4 out.mkv'),
+    '-i in.mp4 out.mkv'
+  );
   // missing output file is recovered deterministically (container from words/codecs)
   assert.strictEqual(typeof mainMod.ensureOutputFile, 'function');
   let eo = mainMod.ensureOutputFile(['-i', 'in.mp4', '-c:v', 'libvpx-vp9', '-an'], 'convert to webm and mute it');
@@ -97,6 +102,12 @@ async function main() {
   r = mainMod.fixupArgs(['-i', 'in.mp4', '-s', '640x360', '-vf', 'scale=-2:360', 'out.mkv']);
   assert.deepStrictEqual(r.args, ['-i', 'in.mp4', '-s', '640x360', '-vf', 'scale=-2:360', 'out.mkv']);
   assert.strictEqual(r.corrections.length, 0, 'valid args must not be rewritten');
+  // duplicate -vf chains merge (ffmpeg keeps only the last -vf)
+  r = mainMod.fixupArgs(['-i', 'in.mp4', '-vf', 'fps=10', '-vf', 'scale=-2:360', 'out.mkv']);
+  assert.deepStrictEqual(r.args, ['-i', 'in.mp4', '-vf', 'fps=10,scale=-2:360', 'out.mkv']);
+  assert.strictEqual(r.corrections.length, 1, 'must report the merge');
+  r = mainMod.fixupArgs(['-i', 'in.mp4', '-filter:v', 'hue=s=0', '-vf', 'scale=-2:720', 'out.mkv']);
+  assert.deepStrictEqual(r.args, ['-i', 'in.mp4', '-vf', 'hue=s=0,scale=-2:720', 'out.mkv']);
   console.log('[smoke] fixupArgs OK');
 
   // input fixup: a literal "-i input.mp4" (or any missing file) must be
@@ -153,6 +164,38 @@ async function main() {
   // unknown duration or no last-N → untouched
   lt = mainMod.fixupLastTrim(['-i', 'in.mp4', '-ss', '0', '-t', '5', 'out.mkv'], 'trim the last 5 seconds', null);
   assert.deepStrictEqual(lt.args, ['-i', 'in.mp4', '-ss', '0', '-t', '5', 'out.mkv']);
+  // contradictions ffmpeg rejects: two-pass, -an with audio flags, copy with filters
+  assert.strictEqual(typeof mainMod.fixupConflicts, 'function');
+  let cf = mainMod.fixupConflicts(['-i', 'in.mp4', '-c:v', 'libx264', '-pass', '1', 'out.mp4']);
+  assert.deepStrictEqual(cf.args, ['-i', 'in.mp4', '-c:v', 'libx264', 'out.mp4']);
+  assert.ok(cf.corrections.length >= 1, 'two-pass must be stripped');
+  cf = mainMod.fixupConflicts(['-i', 'in.mp4', '-c:v', 'libvpx-vp9', '-an', '-c:a', 'libopus', '-b:a', '128k', 'out.webm']);
+  assert.deepStrictEqual(cf.args, ['-i', 'in.mp4', '-c:v', 'libvpx-vp9', '-an', 'out.webm']);
+  assert.ok(cf.corrections.length === 2, 'each contradicting audio flag is reported');
+  cf = mainMod.fixupConflicts(['-i', 'in.mp4', '-vf', 'scale=-2:360', '-c:v', 'copy', '-c:a', 'aac', 'out.mkv']);
+  assert.deepStrictEqual(cf.args, ['-i', 'in.mp4', '-vf', 'scale=-2:360', '-c:v', 'libx264', '-c:a', 'aac', 'out.mkv']);
+  cf = mainMod.fixupConflicts(['-i', 'in.mp4', '-vf', 'scale=-2:360', '-c:v', 'copy', 'out.webm'], 'convert to webm');
+  assert.ok(cf.args.includes('libvpx-vp9') && !cf.args.includes('copy'), 'webm copy+filter uses the webm codec');
+  cf = mainMod.fixupConflicts(['-i', 'in.mp4', '-c:v', 'libx264', '-c:a', 'aac', 'out.mp4']);
+  assert.deepStrictEqual(cf.args, ['-i', 'in.mp4', '-c:v', 'libx264', '-c:a', 'aac', 'out.mp4']);
+  assert.strictEqual(cf.corrections.length, 0, 'sane commands untouched');
+  // pipeline order: contradictions stripped and output ensured before any
+  // insertion, so flag/value pairs stay adjacent (insertions slot before output)
+  const pipe = (a, instr, dur) => {
+    const s1 = mainMod.fixupArgs(a);
+    const s2 = mainMod.fixupInput(s1.args, '/v/clip.mp4');
+    const s3 = mainMod.fixupConflicts(s2.args, instr);
+    const s4 = mainMod.ensureOutputFile(s3.args, instr);
+    const s5 = mainMod.fixupLastTrim(s4.args, instr, dur);
+    return mainMod.fixupSizeLimit(s5.args, instr, dur).args;
+  };
+  const pr = pipe(
+    ['-i', '/v/clip.mp4', '-c:v', 'libvpx-vp9', '-an', '-c:a', 'libopus', '-pass', '1'],
+    'convert to webm below 50MB and mute it', 60
+  );
+  assert.ok(!pr.includes('-pass') && !pr.includes('1'), 'no orphan pass value: ' + pr.join(' '));
+  assert.ok(pr.includes('-an') && pr[pr.length - 1] === 'output.webm', 'mute intact, output kept');
+  assert.strictEqual(pr[pr.indexOf('-b:v') + 1], '6850k', 'size cap value stays paired with its flag');
   // size limits: parsing, math, and single-pass enforcement
   assert.strictEqual(typeof mainMod.parseSizeLimit, 'function');
   assert.strictEqual(typeof mainMod.fixupSizeLimit, 'function');
@@ -179,6 +222,9 @@ async function main() {
   // -an respected: no audio flags injected
   sz = mainMod.fixupSizeLimit(['-i', 'in.mp4', '-c:v', 'libvpx-vp9', '-an', 'out.webm'], 'below 50MB', 60);
   assert.ok(!sz.args.includes('-b:a') && sz.args.includes('-an'), 'muted output stays muted');
+  // oversized -b:a is capped so the limit stays a guarantee
+  sz = mainMod.fixupSizeLimit(['-i', 'in.mp4', '-c:v', 'libx264', '-b:a', '320k', 'out.mp4'], 'below 50MB', 60);
+  assert.ok(sz.args.includes('128k') && !sz.args.includes('320k'), 'audio bitrate must be bounded under a size limit');
   // no duration → untouched (cannot do the math)
   sz = mainMod.fixupSizeLimit(['-i', 'in.mp4', 'out.mp4'], 'below 50MB', null);
   assert.deepStrictEqual(sz.args, ['-i', 'in.mp4', 'out.mp4']);
