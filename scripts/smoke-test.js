@@ -891,6 +891,10 @@ async function main() {
   assert.ok(renderer.includes('paintBar'), 'bar width and ARIA value must move together');
   assert.ok(renderer.includes('previouslyFocused'), 'modal must restore focus');
   assert.ok(renderer.includes('.inert = true'), 'modal must park background interaction');
+  assert.ok(
+    html.indexOf('id="confirmOverlay"') > html.indexOf('</main>'),
+    'modal must live outside <main> so inert parking cannot brick its buttons'
+  );
   assert.ok(css.includes(':focus-visible'), 'keyboard focus must stay visible');
   assert.ok(html.includes('We ask before overwriting an existing file.'), 'hint must promise the ask');
   // terminal starts empty (nothing is ready before the LLM is)
