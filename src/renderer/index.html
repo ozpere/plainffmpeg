@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';" />
+<title>PlainFFmpeg</title>
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+<div id="titlebar">
+  <div class="tb-brand"><img class="tb-icon" src="../../assets/logo.png" alt="" aria-hidden="true" /><span>PlainFFmpeg</span></div>
+  <div class="tb-controls">
+    <button id="minBtn" type="button" aria-label="Minimize" title="Minimize">–</button>
+    <button id="maxBtn" type="button" aria-label="Maximize or restore" title="Maximize or restore">▢</button>
+    <button id="closeBtn" type="button" aria-label="Close" title="Close">✕</button>
+  </div>
+</div>
+<header class="app-header">
+  <div class="brand">
+    <img class="brand-icon-img" src="../../assets/logo.png" alt="PlainFFmpeg logo" />
+    <div class="brand-text">
+      <h1>PlainFFmpeg</h1>
+      <p class="sub">100% offline · on-device LLM · no cloud, no accounts.</p>
+    </div>
+  </div>
+  <div id="engineBadge" class="badge">checking engine…</div>
+</header>
+
+<main>
+  <section id="dropzone" class="card" tabindex="0" aria-label="Drag and drop video area">
+    <div class="dz-inner">
+      <div class="dz-icon">📥</div>
+      <p id="dzPrompt"><strong>Drag &amp; drop a video here</strong> or</p>
+      <button id="browseBtn" type="button">Browse…</button>
+      <p id="fileLabel" class="file-label">No file selected</p>
+      <video id="preview" controls hidden></video>
+    </div>
+  </section>
+
+  <section class="prompt-row">
+    <label for="instruction">Instruction</label>
+    <input id="instruction" type="text" placeholder='e.g. "Convert to mkv, trim the last 5 seconds, make it 360p"' />
+  </section>
+
+  <section class="prompt-row">
+    <label for="outputPath">Output file</label>
+    <div class="output-row">
+      <input id="outputPath" type="text" readonly placeholder="Defaults to output.ext next to the input after translating" />
+      <button id="chooseOutputBtn" type="button">Choose…</button>
+    </div>
+    <p class="hint">Folder and name are yours - the extension always follows the translated command. We ask before overwriting an existing file.</p>
+  </section>
+
+  <section class="btn-row">
+    <button id="translateOnlyBtn" type="button">Translate only</button>
+    <button id="translateBtn" type="button" class="primary">✦ Translate &amp; Run FFmpeg</button>
+    <button id="runBtn" type="button" disabled>▶ Run FFmpeg</button>
+  </section>
+
+  <section>
+    <label for="cmdOut">Translated FFmpeg command</label>
+    <div id="errorBanner" class="error-banner" hidden></div>
+    <pre id="cmdOut" class="cmd">-</pre>
+    <p id="engineNote" class="note"></p>
+  </section>
+
+  <section class="progress-grid">
+    <div class="progress-item">
+      <div class="progress-head"><label>Translation</label><span id="translateStatus" class="progress-status">Idle</span></div>
+      <div class="progress"><div id="barTranslate"></div></div>
+    </div>
+    <div class="progress-item">
+      <div class="progress-head"><label>FFmpeg</label><span id="ffmpegStatus" class="progress-status">Idle</span></div>
+      <div class="progress"><div id="barFfmpeg"></div></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="collapsible-head">
+      <label>Real-time FFmpeg logs</label>
+      <button id="toggleLogsBtn" type="button" class="ghost">Show logs</button>
+    </div>
+    <pre id="terminal" class="terminal" hidden></pre>
+  </section>
+
+  <div id="confirmOverlay" class="overlay" hidden>
+    <div class="modal" role="alertdialog" aria-modal="true" aria-labelledby="confirmTitle">
+      <h2 id="confirmTitle">Output already exists</h2>
+      <p id="confirmMsg"></p>
+      <div class="modal-actions">
+        <button id="confirmCancel" type="button">Cancel</button>
+        <button id="confirmOk" type="button" class="primary">Overwrite</button>
+      </div>
+    </div>
+  </div>
+</main>
+
+<script src="renderer.js"></script>
+</body>
+</html>

@@ -1,0 +1,21 @@
+# dependencies
+node_modules/
+
+# build output
+dist/
+
+# local model weights (fetched via `npm run download-model`, ~1.1 GB)
+models/*.gguf
+models/*.part
+
+# smoke-test leftovers (normally cleaned up automatically)
+scripts/smoke-*.tmp
+scripts/smoke-clip.mp4
+
+# distribution archives built locally
+*.zip
+
+# logs and OS noise
+*.log
+.DS_Store
+Thumbs.db
