@@ -653,7 +653,6 @@ async function main() {
   assert.ok(html.includes('id="openFolderBtn"'), 'UI must have the open-folder button');
   assert.ok(html.includes('>Open folder<'), 'open-folder button must be labeled');
   assert.ok(renderer.includes('openFolderBtn'), 'renderer must wire the open-folder button');
-  assert.ok(renderer.includes('No output folder to open yet.'), 'empty output must explain the disabled shortcut');
   assert.strictEqual(typeof mainMod.handleOpenPath, 'function');
   await assert.rejects(mainMod.handleOpenPath({}), /No folder/, 'empty path rejected');
   await assert.rejects(mainMod.handleOpenPath({ dirPath: '/no/such/dir-plainffmpeg' }), /not found/, 'missing dir rejected');

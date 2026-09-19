@@ -483,15 +483,9 @@
       log('Nothing to run - translate first.');
       return;
     }
-    if (!inputFile) {
-      log('Select an input video first.');
-      return;
-    }
+    // inputFile and output are guaranteed here: lastArgs only exists after
+    // a successful translate (which needs a video), and setFile clears it.
     const out = effectiveOutput();
-    if (!out) {
-      log('No output destination - this should not happen.');
-      return;
-    }
     // Ask (in-app modal) before overwriting an existing file.
     try {
       if (await window.api.outputExists(out)) {
@@ -725,12 +719,10 @@
 
   translateOnlyBtn.addEventListener('click', translate);
   if (openFolderBtn) openFolderBtn.addEventListener('click', async () => {
+    // The button stays disabled until a destination exists, so dir is
+    // non-empty here; main still rejects anything unusable.
     const out = effectiveOutput();
     const dir = out ? dirname(out) : '';
-    if (!dir) {
-      log('No output folder to open yet.');
-      return;
-    }
     try {
       await window.api.openPath(dir);
       log(`opened folder: ${dir}`);
