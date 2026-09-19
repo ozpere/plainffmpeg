@@ -25,6 +25,8 @@ Self-contained offline Electron video editor. Plain English instruction is trans
 
 Run `npm test` plus `npm run test:headless` after every change. Smoke test is the contract: helpers, prompt content, IPC surface, module boundaries (main re-exports fixups/paths/llm by identity), branding, CSS theme, UX copy, downloader integrity, installer copy, and a11y hooks.
 
+Before every commit and push, update `AGENTS.md` and `README.md` when anything they describe changed (modules, commands, IPC channels, status fields, installer steps, portable behavior, user-visible copy). Docs match the code at push time - never push code with stale docs.
+
 ## Layout
 
 ```
