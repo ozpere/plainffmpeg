@@ -261,7 +261,7 @@
   // file:// URL that survives spaces, unicode, and Windows backslashes.
   function toFileUrl(p) {
     const s = String(p);
-    if (/^\\\\[^\\]+\\/.test(s)) {
+    if (/^\\\\[^\\]+(?:\\|$)/.test(s)) {
       // UNC share (\\server\share\dir\file): file://server/share/dir/file.
       return 'file://' + s.replace(/\\/g, '/').split('/').filter(Boolean).map(encodeURIComponent).join('/');
     }

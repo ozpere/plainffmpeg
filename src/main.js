@@ -180,6 +180,7 @@ async function handleDownloadModel(event, payload) {
           throw new Error(`downloaded file smaller than expected (${bytes} bytes).`);
         }
         emit({ state: 'complete', done: bytes, total: bytes, pct: 100 });
+        modelStatCache = { at: 0, path: null, exists: false, size: 0 };
         preloadLlm(); // warm the engine so the badge flips to ready on its own
         return { ok: true, path: dest, size: bytes };
       } catch (err) {
@@ -284,15 +285,25 @@ if (isElectron) {
 // ---------------------------------------------------------------------------
 // IPC
 // ---------------------------------------------------------------------------
+let modelStatCache = { at: 0, path: null, exists: false, size: 0 };
+
 function handleModelStatus() {
   const modelPath = resolveModelPath();
+  // The badge polls every few seconds; a stat per poll is cheap but
+  // pointless, so cache briefly. Reset on successful downloads below.
+  const now = Date.now();
   let exists = false;
   let size = 0;
-  try {
-    const st = fs.statSync(modelPath);
-    exists = st.isFile() && st.size > 1024;
-    size = st.size;
-  } catch { exists = false; }
+  if (modelStatCache.path !== modelPath || now - modelStatCache.at > 5000) {
+    try {
+      const st = fs.statSync(modelPath);
+      exists = st.isFile() && st.size > 1024;
+      size = st.size;
+    } catch { exists = false; }
+    modelStatCache = { at: now, path: modelPath, exists, size };
+  } else {
+    ({ exists, size } = modelStatCache);
+  }
   let llamaAvailable = false;
   try {
     require.resolve('node-llama-cpp');
