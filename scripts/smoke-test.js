@@ -553,6 +553,8 @@ async function main() {
   assert.ok(workflow.includes('retention-days'), 'artifacts must expire instead of piling up');
   assert.ok(workflow.includes('softprops/action-gh-release'), 'tags must publish a Release');
   assert.ok(workflow.includes("github.ref_type == 'tag'"), 'publishing must be tag-only');
+  assert.ok(workflow.includes('cache: npm'), 'CI must cache npm to cut flake surface');
+  assert.ok(workflow.includes('contents: read'), 'build jobs must run least-privilege');
   assert.strictEqual(typeof mainMod.handleDownloadModel, 'function');
   assert.strictEqual(typeof mainMod.userDataModelsDir, 'function');
   assert.strictEqual(typeof mainMod.appDataModelsDir, 'function');
@@ -648,7 +650,7 @@ async function main() {
   const nsh = fs.readFileSync(path.join(__dirname, '../assets/vc-redist.nsh'), 'utf8');
   assert.ok(nsh.includes('customUnInstall'), 'installer must clean up on uninstall');
   assert.ok(nsh.includes('RMDir /r "$APPDATA\\PlainFFmpeg"'), 'uninstall must remove the model data dir');
-  assert.ok(nsh.includes('RMDir /r "$LOCALAPPDATA\\plainffmpeg-updater"'), 'uninstall must remove the staged installer copy');
+  assert.ok(!nsh.includes('plainffmpeg-updater'), 'stale updater path must be gone');
   // redist failures must warn, never pass silently: only 0/1638/3010 are success.
   assert.ok(nsh.includes('1638') && nsh.includes('3010'), 'installer must allowlist the benign redist exit codes');
   assert.ok(nsh.includes('MessageBox'), 'redist failure must warn instead of going green');

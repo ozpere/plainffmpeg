@@ -24,10 +24,8 @@
   plainffmpegVcRedistDone:
 !macroend
 
-; Uninstall must not orphan the 1.3 GB model in the per-user app data dir,
-; nor the builder-staged installer copy in Local (see below).
+; Uninstall removes the per-user app data dir (including the 1.3 GB model).
 ; (The portable needs no hook: its data lives next to the exe by default.)
 !macro customUnInstall
   RMDir /r "$APPDATA\PlainFFmpeg"
-  RMDir /r "$LOCALAPPDATA\plainffmpeg-updater"
 !macroend
