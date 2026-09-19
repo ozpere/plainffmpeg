@@ -64,8 +64,8 @@ Order is fixed in `handleTranslatePrompt`:
 - `resolveModelPath` honors `MODEL_PATH` env. Portable branch is deliberately short: exe-side `PlainFFmpegData` home, then per-user data dir as the LAST fallback (nothing after it). Other flows: preferred write target, then any dir holding an existing download, then Qwen alias filenames.
 - Thin installer: no `*.gguf` is ever bundled (`build.files` excludes models). First launch shows `#modelDl`; `download-model` IPC streams `model-download-progress` and warms the engine on success.
 - `llamaDiagnostics` + `llamaPrebuiltProbe` must keep working: they turn load failures into a pasteable answer. Keep `handleModelStatus` fields stable: `ready, loading, loadError, exists, size, engine, portable, fallbackToAppData`.
-- Portable app-data fallback is consent-gated: `handleDownloadModel` returns `needsConsent` without it, the renderer asks via the themed `confirmDialog` modal, and `#portableNote` stays visible while the fallback is active.
-- Temp drop imports go to `os.tmpdir()/plainffmpeg-drops`, capped at 500 MB (enforced in main and renderer).
+- Portable app-data fallback is consent-gated: `handleDownloadModel` returns `needsConsent` without it, the renderer asks via the themed `confirmDialog` modal, and `#portableNote` stays visible while the fallback is active. Portable launches also redirect Electron's own profile (`userData`, `sessionData`, `cache`) into `PlainFFmpegData`, so deleting the folder leaves no trace.
+- Temp drop imports go to `dropsDir()` (`PlainFFmpegData/drops` for portable runs, else `os.tmpdir()/plainffmpeg-drops`), capped at 500 MB (enforced in main and renderer).
 - Spawned binaries must resolve beside the asar (`app.asar.unpacked`): `child_process.spawn` is not asar-patched, so asarUnpack alone is not enough (see `ffmpegPath`).
 
 ## IPC and UI

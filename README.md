@@ -56,7 +56,8 @@ Download card and fetches the model itself (resumable, with progress),
 then works fully offline. Installed copies keep the model in the per-user
 app data folder, so no admin rights are needed. Uninstalling removes it.
 The portable instead keeps its data in a `PlainFFmpegData` folder next to
-the exe (when that location is writable) - deleting the folder removes
+the exe (when that location is writable): the model, Electron's own
+profile data, and any drag-and-drop imports - deleting the folder removes
 everything, no leftovers. If the exe folder is not writable, the portable
 asks before downloading the model to Windows app data instead, and keeps a
 visible note while that fallback is active. Either way the resolved model

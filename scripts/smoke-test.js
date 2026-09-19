@@ -531,6 +531,30 @@ async function main() {
     fs.rmSync(pdir, { recursive: true, force: true });
   }
   assert.ok(mainSrc.includes('PORTABLE_EXECUTABLE_DIR'), 'main must detect portable launches');
+  // portable self-containment: Electron profile + drop imports live next to
+  // the exe, so deleting the folder leaves no trace
+  assert.strictEqual(typeof mainMod.dropsDir, 'function');
+  delete process.env.PORTABLE_EXECUTABLE_DIR;
+  assert.strictEqual(
+    mainMod.dropsDir(), path.join(os.tmpdir(), 'plainffmpeg-drops'),
+    'no portable env means OS temp drops'
+  );
+  assert.ok(mainSrc.includes("app.setPath('userData'"), 'portable must redirect the Electron profile exe-side');
+  assert.ok(mainSrc.includes("'user-data'"), 'profile must live inside PlainFFmpegData');
+  const dhome = fs.mkdtempSync(path.join(os.tmpdir(), 'pfm-drops-'));
+  try {
+    process.env.PORTABLE_EXECUTABLE_DIR = dhome;
+    assert.strictEqual(
+      mainMod.dropsDir(), path.join(dhome, 'PlainFFmpegData', 'drops'),
+      'portable drops must stage exe-side'
+    );
+    const pDrop = await mainMod.handleSaveDroppedFile({ name: 'clip.mp4', buffer: Buffer.from('portable-bytes') });
+    assert.ok(pDrop.startsWith(path.join(dhome, 'PlainFFmpegData')), 'portable drop must stay inside the exe folder');
+    assert.strictEqual(fs.readFileSync(pDrop).toString(), 'portable-bytes', 'portable dropped bytes round-trip');
+  } finally {
+    delete process.env.PORTABLE_EXECUTABLE_DIR;
+    fs.rmSync(dhome, { recursive: true, force: true });
+  }
   // portable resolve branch: exe-side home, app data last, nothing after it
   assert.strictEqual(typeof mainMod.isPortableLaunch, 'function');
   assert.strictEqual(typeof mainMod.portableFallbackActive, 'function');

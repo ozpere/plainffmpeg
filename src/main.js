@@ -25,6 +25,29 @@ try {
   isElectron = !!(app && typeof app.whenReady === 'function' && process.versions && process.versions.electron);
 } catch { /* plain Node (smoke tests): helpers below still work */ }
 
+// Portable self-containment: a portable run keeps EVERYTHING next to the
+// exe (model, Electron profile, drop imports) so deleting the folder leaves
+// no trace. Capture the real per-user data dir first, then redirect
+// Electron's own profile (Preferences, Local Storage, GPUCache, ...) into
+// PlainFFmpegData. No-op when the exe dir is missing or read-only - that
+// run falls back with consent, as before. Must run before app.ready.
+let defaultUserDataDir = null;
+try {
+  if (isElectron && app && typeof app.getPath === 'function') {
+    defaultUserDataDir = app.getPath('userData');
+  }
+} catch { defaultUserDataDir = null; }
+try {
+  // portableDataDir() is hoisted (function declaration), so it is safe to
+  // call here at module load, before app.ready.
+  const base = portableDataDir();
+  if (base && isElectron && app && typeof app.setPath === 'function') {
+    app.setPath('userData', path.join(base, 'user-data'));
+    try { app.setPath('sessionData', path.join(base, 'user-data')); } catch { /* older Electron */ }
+    try { app.setPath('cache', path.join(base, 'cache')); } catch { /* name unsupported */ }
+  }
+} catch { /* keep Electron defaults */ }
+
 let ffmpegPath;
 try {
   const rawFfmpegPath = require('ffmpeg-static');
@@ -169,9 +192,12 @@ function userDataModelsDir() {
   return appDataModelsDir();
 }
 
-// Per-user app data models dir (null in plain Node).
+// Per-user app data models dir (null in plain Node). Uses the data dir
+// captured before the portable redirect, so the portable "last fallback"
+// and the fallback notice keep pointing at the real app-data location.
 function appDataModelsDir() {
   try {
+    if (defaultUserDataDir) return path.join(defaultUserDataDir, 'models');
     if (isElectron && app && typeof app.getPath === 'function') {
       return path.join(app.getPath('userData'), 'models');
     }
@@ -205,6 +231,16 @@ function portableDataDir() {
     return path.join(exeDir, 'PlainFFmpegData');
   } catch { /* not usable - fall back to app data */ }
   return null;
+}
+
+// Drop-import staging dir: exe-side for portable runs (deleting the folder
+// removes them), OS temp otherwise. Never throws.
+function dropsDir() {
+  try {
+    const base = portableDataDir();
+    if (base) return path.join(base, 'drops');
+  } catch { /* fall through to OS temp */ }
+  return path.join(os.tmpdir(), 'plainffmpeg-drops');
 }
 
 let llamaInitPromise = null;
@@ -985,7 +1021,7 @@ async function handleSaveDroppedFile({ name, buffer } = {}) {
   if (buffer.byteLength > MAX_DROP_BYTES) {
     throw new Error(`Dropped file too large (${(buffer.byteLength / 1048576).toFixed(0)} MB) - 500 MB max.`);
   }
-  const dir = path.join(os.tmpdir(), 'plainffmpeg-drops');
+  const dir = dropsDir();
   fs.mkdirSync(dir, { recursive: true });
   const safe = String(name || 'dropped-video').replace(/[^\w.\-() ]+/g, '_').slice(-120) || 'dropped-video';
   const target = path.join(dir, safe);
@@ -1401,6 +1437,7 @@ module.exports = {
   portableDataDir,
   isPortableLaunch,
   portableFallbackActive,
+  dropsDir,
   handleDownloadModel,
   defaultOutputPath,
   handleModelStatus,
