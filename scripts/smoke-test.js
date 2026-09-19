@@ -354,7 +354,7 @@ async function main() {
   console.log('[smoke] themed errors OK');
 
   // optional deps resolve (warn only)
-  for (const dep of ['electron', 'node-llama-cpp', 'ffmpeg-static', 'fluent-ffmpeg']) {
+  for (const dep of ['electron', 'node-llama-cpp', 'ffmpeg-static']) {
     try {
       require.resolve(dep, { paths: [path.join(__dirname, '..')] });
       console.log(`[smoke] dep resolvable: ${dep}`);
@@ -544,6 +544,8 @@ async function main() {
   assert.ok((pkg.build.files || []).includes('scripts/download-model.js'), 'first-launch downloader must ship in the app');
   assert.strictEqual(pkg.build.nsis && pkg.build.nsis.include, 'assets/vc-redist.nsh', 'installer must bundle the MSVC redist step');
   assert.ok(pkg.scripts['dist:win'] && pkg.scripts['fetch-vc-redist'], 'dist scripts must exist');
+  assert.ok(/^\^?44/.test(pkg.devDependencies.electron), 'electron must stay on v44+ (Node 20 is EOL)');
+  assert.ok(!pkg.dependencies['fluent-ffmpeg'], 'unmaintained wrapper must stay removed (runner spawns ffmpeg directly)');
   const linuxTargets = (pkg.build.linux && pkg.build.linux.target) || [];
   assert.ok(linuxTargets.some((t) => t.target === 'AppImage'), 'linux build must produce an AppImage');
   assert.ok(pkg.scripts['dist:linux'], 'linux dist script must exist');

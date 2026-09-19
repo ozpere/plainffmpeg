@@ -4,9 +4,9 @@ Self-contained offline Electron video editor. Plain English instruction is trans
 
 ## Stack
 
-- Node.js 20 LTS (matches Electron 33 runtime), Electron 33, CommonJS in `src/main.js`
+- Node.js 24 LTS (matches Electron 44 runtime), Electron 44, CommonJS in `src/main.js`
 - `node-llama-cpp` v3 is pure ESM. Our code is CJS, so load it only via `await import('node-llama-cpp')` in `src/llm.js`. Never `require()` it (throws ERR_REQUIRE_ESM).
-- `ffmpeg-static` + `fluent-ffmpeg` (spawned directly so arbitrary LLM flags run verbatim)
+- `ffmpeg-static` spawned directly so arbitrary LLM flags run verbatim (no wrapper library)
 - Vanilla JS renderer, no framework. `src/preload.js` is the only IPC bridge (contextIsolation, no nodeIntegration).
 - Model lives at `models/model.gguf` in dev (~1.3 GB, gitignored). Never commit `*.gguf`.
 

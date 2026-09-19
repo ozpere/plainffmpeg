@@ -15,7 +15,7 @@ instead. No silent fallbacks, anywhere.
 
 ## Prerequisites
 
-- **Node.js 20 LTS** - https://nodejs.org (matches the Electron 33 runtime)
+- **Node.js 24 LTS** - https://nodejs.org (matches the Electron 44 runtime)
 - **Git** - https://git-scm.com (Windows: then run
   `git config --global core.longpaths true` once)
 - **Windows only:** Microsoft Visual C++ Redistributable (x64) -

@@ -93,13 +93,9 @@ try {
   ffmpegPath = null;
 }
 
-let fluentFfmpeg = null;
-try {
-  fluentFfmpeg = require('fluent-ffmpeg');
-  if (ffmpegPath) fluentFfmpeg.setFfmpegPath(ffmpegPath);
-} catch (e) {
-  console.error('[main] fluent-ffmpeg not available:', e.message);
-}
+// Note: fluent-ffmpeg was removed - the runner spawns the ffmpeg-static
+// binary directly (arbitrary LLM flags run verbatim), so the 2017 wrapper
+// bought nothing but a dependency.
 
 // ---------------------------------------------------------------------------
 // Paths and model locations (see paths.js)
@@ -551,7 +547,6 @@ async function probeMedia(inputFile) {
 
 async function handleRunFfmpeg(event, { args, outputFile }) {
   if (!ffmpegPath) throw new Error('ffmpeg-static binary not available.');
-  if (!fluentFfmpeg) throw new Error('fluent-ffmpeg not available.');
   if (!Array.isArray(args) || args.length === 0) throw new Error('No FFmpeg args provided.');
 
   const sender = event && event.sender;
