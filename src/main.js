@@ -543,7 +543,10 @@ async function handleRunFfmpeg(event, { args, outputFile }) {
   if (!fluentFfmpeg) throw new Error('fluent-ffmpeg not available.');
   if (!Array.isArray(args) || args.length === 0) throw new Error('No FFmpeg args provided.');
 
-  const sender = event.sender;
+  const sender = event && event.sender;
+  if (!sender || typeof sender.send !== 'function') {
+    throw new Error('run-ffmpeg must be called from the app window.');
+  }
   const emit = (channel, payload) => {
     try { sender.send(channel, payload); } catch { /* window closed */ }
   };
@@ -643,6 +646,7 @@ module.exports = {
   ensureOutputFile,
   parseSizeLimit,
   probeMedia,
+  handleRunFfmpeg,
   enforceOutputExtension,
   resolveModelPath,
   userDataModelsDir,

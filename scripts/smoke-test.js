@@ -155,6 +155,12 @@ async function main() {
   // "trim the last N seconds" = CUT them (removal): keep [0, D-N]
   assert.strictEqual(typeof mainMod.fixupLastTrim, 'function');
   assert.strictEqual(typeof mainMod.probeMedia, 'function');
+  assert.strictEqual(typeof mainMod.handleRunFfmpeg, 'function');
+  await assert.rejects(
+    mainMod.handleRunFfmpeg(undefined, { args: ['-y'], outputFile: 'out.mp4' }),
+    /from the app window/,
+    'run without an IPC sender must fail cleanly'
+  );
   let lt = mainMod.fixupLastTrim(
     ['-i', 'in.mp4', '-ss', '00:00:00', '-t', '00:00:05', '-vf', 'scale=-2:360', 'out.mkv'],
     'Convert to mkv, trim the last 5 seconds, make it 360p',
