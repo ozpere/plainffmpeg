@@ -9,6 +9,9 @@ const assert = require('assert');
 const required = [
   'package.json',
   'src/main.js',
+  'src/fixups.js',
+  'src/paths.js',
+  'src/llm.js',
   'src/preload.js',
   'src/renderer/index.html',
   'src/renderer/renderer.js',
@@ -28,11 +31,20 @@ async function main() {
   console.log('[smoke] project files OK');
 
   // syntax is also covered file-by-file via `npm test`; here require pure helpers.
+  // main.js re-exports the split modules (fixups/paths/llm) so the established
+  // contract holds; the modules themselves are asserted directly too.
   const mainMod = require('../src/main.js');
+  const fixupsMod = require('../src/fixups.js');
+  const pathsMod = require('../src/paths.js');
+  const llmMod = require('../src/llm.js');
   assert.strictEqual(typeof mainMod.sanitizeModelOutput, 'function');
   assert.strictEqual(typeof mainMod.tokenizeArgs, 'function');
   assert.strictEqual(typeof mainMod.handleTranslatePrompt, 'function');
   assert.strictEqual(mainMod.fallbackTranslate, undefined, 'silent fallback must be removed');
+  assert.strictEqual(fixupsMod.sanitizeModelOutput, mainMod.sanitizeModelOutput, 'fixups must be the same functions main re-exports');
+  assert.strictEqual(pathsMod.resolveModelPath, mainMod.resolveModelPath, 'paths must be the same functions main re-exports');
+  assert.strictEqual(typeof llmMod.getLlamaSession, 'function', 'llm module must own the session');
+  assert.strictEqual(mainMod.SYSTEM_PROMPT, llmMod.SYSTEM_PROMPT, 'main must re-export the llm system prompt');
 
   // sanitize: strip fences + leading binary name
   assert.strictEqual(
@@ -258,17 +270,21 @@ async function main() {
     console.log('[smoke] probeMedia SKIPPED:', e.message);
   }
 
-  // node-llama-cpp v3 is pure ESM: main.js must load it via dynamic import(),
+  // node-llama-cpp v3 is pure ESM: llm.js must load it via dynamic import(),
   // never require() (ERR_REQUIRE_ESM otherwise - the exact Windows failure).
   const mainSrc = fs.readFileSync(path.join(__dirname, '../src/main.js'), 'utf8');
+  const llmSrc = fs.readFileSync(path.join(__dirname, '../src/llm.js'), 'utf8');
+  const pathsSrc = fs.readFileSync(path.join(__dirname, '../src/paths.js'), 'utf8');
   assert.ok(
-    mainSrc.includes("await import('node-llama-cpp')"),
-    'main.js must dynamically import node-llama-cpp'
+    llmSrc.includes("await import('node-llama-cpp')"),
+    'llm.js must dynamically import node-llama-cpp'
   );
-  assert.ok(
-    !mainSrc.includes("require('node-llama-cpp')") && !mainSrc.includes('require("node-llama-cpp")'),
-    'main.js must not require() node-llama-cpp (ESM-only)'
-  );
+  for (const [name, src] of [['main.js', mainSrc], ['llm.js', llmSrc]]) {
+    assert.ok(
+      !src.includes("require('node-llama-cpp')") && !src.includes('require("node-llama-cpp")'),
+      `${name} must not require() node-llama-cpp (ESM-only)`
+    );
+  }
 
   // preload/renderer/html sources (declared early - used by several blocks below)
   const preload = fs.readFileSync(path.join(__dirname, '../src/preload.js'), 'utf8');
@@ -326,7 +342,7 @@ async function main() {
   assert.ok(!renderer.includes('Last LLM load failed - will retry on first translation'), 'misleading retry line must be gone');
   assert.ok(renderer.includes('showBanner'), 'errors must surface through the themed banner');
   // main names the same cause in logs, never the old retry promise
-  assert.ok(mainSrc.includes('Visual C++ Redistributable'), 'main logs must name the redistributable');
+  assert.ok(pathsSrc.includes('Visual C++ Redistributable'), 'MSVC hint must name the redistributable');
   assert.ok(mainSrc.includes('msvcRuntimeStatus'), 'main must detect the runtime');
   assert.ok(!mainSrc.includes('will retry on first translation'), 'old retry promise must be gone from main');
   console.log('[smoke] themed errors OK');
@@ -553,7 +569,7 @@ async function main() {
     delete process.env.PORTABLE_EXECUTABLE_DIR;
     fs.rmSync(pdir, { recursive: true, force: true });
   }
-  assert.ok(mainSrc.includes('PORTABLE_EXECUTABLE_DIR'), 'main must detect portable launches');
+  assert.ok(pathsSrc.includes('PORTABLE_EXECUTABLE_DIR'), 'paths must detect portable launches');
   // portable self-containment: Electron profile + drop imports live next to
   // the exe, so deleting the folder leaves no trace
   assert.strictEqual(typeof mainMod.dropsDir, 'function');
@@ -797,7 +813,7 @@ async function main() {
   // no long dashes anywhere user- or dev-visible (house style: short hyphen).
   // NOTE: built from a char code so this file stays clean of the banned char.
   const bannedDash = String.fromCharCode(0x2014);
-  for (const f of ['src/main.js', 'src/preload.js', 'src/renderer/index.html',
+  for (const f of ['src/main.js', 'src/fixups.js', 'src/paths.js', 'src/llm.js', 'src/preload.js', 'src/renderer/index.html',
     'src/renderer/renderer.js', 'src/renderer/styles.css', 'package.json',
     'scripts/download-model.js', 'scripts/fetch-vc-redist.js', 'scripts/install-windows.js',
     'assets/vc-redist.nsh', '.github/workflows/release.yml']) {

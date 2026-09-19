@@ -28,7 +28,10 @@ Run `npm test` plus `npm run test:headless` after every change. Smoke test is th
 ## Layout
 
 ```
-src/main.js              Main process: LLM engine, SYSTEM_PROMPT, fixup layers, probe, run, IPC handlers
+src/main.js              Main process: Electron bootstrap, window, IPC handlers, translate/run orchestration (re-exports fixups/paths/llm to preserve the module contract)
+src/fixups.js            Deterministic translation pipeline: sanitize, tokenize, all fixup* layers, parse/format helpers. Pure functions, no Electron.
+src/paths.js             On-disk locations: model resolution, portable dirs, MSVC detection, output paths. Own require-safe Electron import.
+src/llm.js               Local GGUF engine: SYSTEM_PROMPT, session state, diagnostics. No Electron; orchestrated by main.js.
 src/preload.js           contextBridge API, must mirror IPC channels 1:1
 src/renderer/renderer.js UI logic: load, probe, translate, run, drag-drop, modals, badges, model download
 src/renderer/index.html  UI structure, frameless titlebar, split progress bars, model download card
