@@ -863,6 +863,12 @@ async function main() {
     assert.ok(pkg.scripts.postinstall.includes('--best-effort'), 'postinstall must not fail offline installs');
     const dlSrc = fs.readFileSync(path.join(__dirname, 'download-model.js'), 'utf8');
     assert.ok(dlSrc.includes('--best-effort'), 'downloader must support best-effort installs');
+    // hung connections must abort so callers retry and resume instead of hanging forever.
+    assert.ok(dlSrc.includes('AbortController'), 'model download must watch for stalls');
+    assert.ok(dlSrc.includes('empty response body'), 'model download must reject bodyless responses');
+    const vcSrc = fs.readFileSync(path.join(__dirname, 'fetch-vc-redist.js'), 'utf8');
+    assert.ok(vcSrc.includes('attempt <= 3'), 'redist fetch must retry transient failures');
+    assert.ok(vcSrc.includes('AbortController'), 'redist fetch must time out');
   }
   const css = fs.readFileSync(path.join(__dirname, '../src/renderer/styles.css'), 'utf8');
   assert.ok(css.includes('.model-dl[hidden]'), 'download card must honor hidden');

@@ -48,9 +48,34 @@ async function main() {
       return;
     }
   } catch { /* missing - download below */ }
+  // Small file, but aka.ms blips fail the whole Windows release job alone -
+  // retry a few times with backoff before giving up.
+  let lastErr = null;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      await fetchOnce();
+      return;
+    } catch (e) {
+      lastErr = e;
+      console.error(`[fetch-vc-redist] attempt ${attempt} failed: ${(e && e.message) || e}`);
+      if (attempt < 3) await new Promise((r) => setTimeout(r, 2000 * attempt));
+    }
+  }
+  throw lastErr;
+}
+
+async function fetchOnce() {
   console.log(`[fetch-vc-redist] fetching ${SOURCE}`);
-  const res = await fetch(SOURCE, { redirect: 'follow' });
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => { try { ctrl.abort(); } catch { /* ignore */ } }, 120000);
+  let res;
+  try {
+    res = await fetch(SOURCE, { redirect: 'follow', signal: ctrl.signal });
+  } finally {
+    clearTimeout(timer);
+  }
   if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText} for ${SOURCE}`);
+  if (!res.body) throw new Error(`empty response body for ${SOURCE}`);
   fs.mkdirSync(path.dirname(DEST), { recursive: true });
   // Write to .part and rename only on success: an interrupted download must
   // never pass the skip check above as a corrupt exe.

@@ -53,89 +53,104 @@ async function downloadTo(url, dest, { onProgress, expectMagic, _retried } = {})
     }
   }
   try { fs.writeFileSync(sidecar, url); } catch { /* tracking only - download works without it */ }
-  const headers = {};
-  if (start > 0) headers.Range = `bytes=${start}-`;
-  const res = await fetch(url, { redirect: 'follow', headers });
-  if (res.status === 416) {
-    // Range unsatisfiable (remote file changed) - restart from zero.
-    try { fs.rmSync(tmp, { force: true }); } catch { /* ignore */ }
-    return downloadTo(url, dest, { onProgress, expectMagic });
-  }
-  if (res.status !== 200 && res.status !== 206) {
-    throw new Error(`HTTP ${res.status} ${res.statusText} for ${url}`);
-  }
-  let resume = res.status === 206;
-  if (resume && start > 0 && !_retried) {
-    // The server must continue where asked - a 206 starting elsewhere would
-    // splice corrupt bytes on append, so restart once instead.
-    const m = /bytes\s+(\d+)-/i.exec(res.headers.get('content-range') || '');
-    if (m && parseInt(m[1], 10) !== start) {
-      console.log(`[download-model] server resumed at ${m[1]} instead of ${start} - restarting.`);
-      try { if (res.body && res.body.cancel) await res.body.cancel(); } catch { /* ignore */ }
-      try { fs.rmSync(tmp, { force: true }); } catch { /* ignore */ }
-      return downloadTo(url, dest, { onProgress, expectMagic, _retried: true });
-    }
-  }
-  if (!resume && start > 0) {
-    // Server ignored Range - restarting avoids a corrupt splice.
-    try { fs.rmSync(tmp, { force: true }); } catch { /* ignore */ }
-    start = 0;
-  }
-  const remaining = Number(res.headers.get('content-length') || 0);
-  const total = remaining > 0 ? start + remaining : 0;
-  fs.mkdirSync(path.dirname(dest), { recursive: true });
-  const file = fs.createWriteStream(tmp, { flags: resume && start > 0 ? 'a' : 'w' });
-  let done = start;
-  const report = () => {
-    if (typeof onProgress === 'function') {
-      try { onProgress({ done, total }); } catch { /* progress must never break the download */ }
-    }
-  };
-  report();
-  const reader = res.body.getReader();
-  let streamErr = null;
+  // Stall watchdog: a hung CDN connection aborts so the caller retries and
+  // resumes instead of hanging forever. Always cleared in the finally below.
+  const ctrl = new AbortController();
+  let lastActivity = Date.now();
+  const watchdog = setInterval(() => {
+    if (Date.now() - lastActivity > 60000) { try { ctrl.abort(); } catch { /* ignore */ } }
+  }, 5000);
+  if (watchdog.unref) watchdog.unref();
   try {
-    for (;;) {
-      const { done: end, value } = await reader.read();
-      if (end) break;
-      done += value.length;
-      await new Promise((resolve, reject) => file.write(value, (e) => (e ? reject(e) : resolve())));
-      if (total && done % (50 * 1024 * 1024) < value.length) {
-        console.log(`[download-model] ${(done / 1e6).toFixed(1)} / ${(total / 1e6).toFixed(1)} MB`);
-      }
-      report();
-    }
-  } catch (e) {
-    streamErr = e;
-  }
-  await new Promise((resolve) => file.close(resolve));
-  if (total > 0 && done !== total) {
-    throw new Error(`incomplete download (${done} of ${total} bytes) - try again to resume.`);
-  }
-  if (expectMagic) {
-    // Cheap format gate: a GGUF model starts with "GGUF". An HTML error page
-    // or wrong file fails here instead of confusing the LLM loader later.
-    const magic = Buffer.from(String(expectMagic));
-    let head = Buffer.alloc(0);
-    try {
-      const fd = fs.openSync(tmp, 'r');
-      try {
-        head = Buffer.alloc(magic.length);
-        fs.readSync(fd, head, 0, magic.length, 0);
-      } finally {
-        fs.closeSync(fd);
-      }
-    } catch { /* unreadable counts as mismatch below */ }
-    if (!head.equals(magic)) {
+    const headers = {};
+    if (start > 0) headers.Range = `bytes=${start}-`;
+    const res = await fetch(url, { redirect: 'follow', headers, signal: ctrl.signal });
+    if (res.status === 416) {
+      // Range unsatisfiable (remote file changed) - restart from zero.
       try { fs.rmSync(tmp, { force: true }); } catch { /* ignore */ }
-      throw new Error(`downloaded file failed format check (no "${expectMagic}" header) - removed.`);
+      return downloadTo(url, dest, { onProgress, expectMagic });
     }
+    if (res.status !== 200 && res.status !== 206) {
+      throw new Error(`HTTP ${res.status} ${res.statusText} for ${url}`);
+    }
+    if (!res.body) throw new Error(`empty response body for ${url}`);
+    let resume = res.status === 206;
+    if (resume && start > 0 && !_retried) {
+      // The server must continue where asked - a 206 starting elsewhere would
+      // splice corrupt bytes on append, so restart once instead.
+      const m = /bytes\s+(\d+)-/i.exec(res.headers.get('content-range') || '');
+      if (m && parseInt(m[1], 10) !== start) {
+        console.log(`[download-model] server resumed at ${m[1]} instead of ${start} - restarting.`);
+        try { if (res.body && res.body.cancel) await res.body.cancel(); } catch { /* ignore */ }
+        try { fs.rmSync(tmp, { force: true }); } catch { /* ignore */ }
+        return downloadTo(url, dest, { onProgress, expectMagic, _retried: true });
+      }
+    }
+    if (!resume && start > 0) {
+      // Server ignored Range - restarting avoids a corrupt splice.
+      try { fs.rmSync(tmp, { force: true }); } catch { /* ignore */ }
+      start = 0;
+    }
+    const remaining = Number(res.headers.get('content-length') || 0);
+    const total = remaining > 0 ? start + remaining : 0;
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    const file = fs.createWriteStream(tmp, { flags: resume && start > 0 ? 'a' : 'w' });
+    let done = start;
+    const report = () => {
+      lastActivity = Date.now();
+      if (typeof onProgress === 'function') {
+        try { onProgress({ done, total }); } catch { /* progress must never break the download */ }
+      }
+    };
+    report();
+    const reader = res.body.getReader();
+    let streamErr = null;
+    try {
+      for (;;) {
+        const { done: end, value } = await reader.read();
+        if (end) break;
+        done += value.length;
+        await new Promise((resolve, reject) => file.write(value, (e) => (e ? reject(e) : resolve())));
+        if (total && done % (50 * 1024 * 1024) < value.length) {
+          console.log(`[download-model] ${(done / 1e6).toFixed(1)} / ${(total / 1e6).toFixed(1)} MB`);
+        }
+        report();
+      }
+    } catch (e) {
+      streamErr = e;
+    }
+    await new Promise((resolve) => file.close(resolve));
+    if (total > 0 && done !== total) {
+      throw new Error(`incomplete download (${done} of ${total} bytes) - try again to resume.`);
+    }
+    if (streamErr) throw streamErr;
+    if (expectMagic) {
+      // Cheap format gate: a GGUF model starts with "GGUF". An HTML error page
+      // or wrong file fails here instead of confusing the LLM loader later.
+      const magic = Buffer.from(String(expectMagic));
+      let head = Buffer.alloc(0);
+      try {
+        const fd = fs.openSync(tmp, 'r');
+        try {
+          head = Buffer.alloc(magic.length);
+          fs.readSync(fd, head, 0, magic.length, 0);
+        } finally {
+          fs.closeSync(fd);
+        }
+      } catch { /* unreadable counts as mismatch below */ }
+      if (!head.equals(magic)) {
+        try { fs.rmSync(tmp, { force: true }); } catch { /* ignore */ }
+        throw new Error(`downloaded file failed format check (no "${expectMagic}" header) - removed.`);
+      }
+    }
+    fs.renameSync(tmp, dest);
+    try { fs.rmSync(sidecar, { force: true }); } catch { /* ignore */ }
+    console.log(`[download-model] saved ${dest} (${(done / 1e6).toFixed(1)} MB)`);
+    report();
+    return { bytes: done, total };
+  } finally {
+    clearInterval(watchdog);
   }
-  fs.renameSync(tmp, dest);
-  try { fs.rmSync(sidecar, { force: true }); } catch { /* ignore */ }
-  console.log(`[download-model] saved ${dest} (${(done / 1e6).toFixed(1)} MB)`);
-  report();
-  return { bytes: done, total };
 }
 
 async function main() {
