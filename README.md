@@ -68,6 +68,8 @@ Notes:
   can set it up silently (the local AI engine needs it on stock Windows).
 - Windows releases are also built by CI (`.github/workflows/release-win.yml`,
   manual run or a `v*` tag) and uploaded as artifacts.
+- `npm run dist:linux` builds an `x86_64.AppImage` (also built by CI).
+  No extra runtime is needed on Linux.
 - Unsigned builds trigger a Windows SmartScreen warning on first run -
   expected until releases are code-signed.
 

@@ -438,6 +438,9 @@ async function main() {
   assert.ok((pkg.build.files || []).includes('scripts/download-model.js'), 'first-launch downloader must ship in the app');
   assert.strictEqual(pkg.build.nsis && pkg.build.nsis.include, 'assets/vc-redist.nsh', 'installer must bundle the MSVC redist step');
   assert.ok(pkg.scripts['dist:win'] && pkg.scripts['fetch-vc-redist'], 'dist scripts must exist');
+  const linuxTargets = (pkg.build.linux && pkg.build.linux.target) || [];
+  assert.ok(linuxTargets.some((t) => t.target === 'AppImage'), 'linux build must produce an AppImage');
+  assert.ok(pkg.scripts['dist:linux'], 'linux dist script must exist');
   assert.strictEqual(typeof mainMod.handleDownloadModel, 'function');
   assert.strictEqual(typeof mainMod.userDataModelsDir, 'function');
   assert.strictEqual(typeof mainMod.appDataModelsDir, 'function');

@@ -11,6 +11,7 @@
     "install:win": "node scripts/install-windows.js",
     "dist": "electron-builder --publish never",
     "dist:win": "electron-builder --win nsis portable --publish never",
+    "dist:linux": "electron-builder --linux AppImage --publish never",
     "postinstall": "node scripts/download-model.js --check-only || npm run download-model",
     "test": "node --check src/main.js && node --check src/preload.js && node --check src/renderer/renderer.js && node --check scripts/download-model.js && node --check scripts/fetch-vc-redist.js && node --check scripts/install-windows.js && node --check scripts/smoke-test.js && echo \"syntax OK\"",
     "test:headless": "node scripts/smoke-test.js"
@@ -62,6 +63,14 @@
     },
     "portable": {
       "artifactName": "PlainFFmpeg-Portable-${version}.exe"
+    },
+    "linux": {
+      "icon": "assets/logo.png",
+      "category": "AudioVideo",
+      "target": [
+        { "target": "AppImage", "arch": ["x64"] }
+      ],
+      "artifactName": "PlainFFmpeg-${version}-x86_64.AppImage"
     }
   }
 }
