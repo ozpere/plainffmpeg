@@ -111,8 +111,18 @@ if (CHECK_ONLY) {
 }
 
 // --- install (CPU-only llama binaries, no Vulkan, no source build) ------------
-const env = { ...process.env, NODE_LLAMA_CPP_GPU: 'false' };
+// The ~1.3 GB model fetch is off by default: installs stay fast and work
+// offline, and first launch (or `npm run download-model`) covers it.
+// Export SKIP_MODEL_DOWNLOAD=0 to fetch during install anyway.
+const env = {
+  ...process.env,
+  NODE_LLAMA_CPP_GPU: 'false',
+  SKIP_MODEL_DOWNLOAD: process.env.SKIP_MODEL_DOWNLOAD ?? '1',
+};
 log('running npm install with NODE_LLAMA_CPP_GPU=false (CPU-only prebuilt binary)...');
+if (env.SKIP_MODEL_DOWNLOAD === '1') {
+  log('SKIP_MODEL_DOWNLOAD=1 (model fetch deferred to first launch; export SKIP_MODEL_DOWNLOAD=0 to fetch now).');
+}
 const npmCmd = IS_WIN ? 'npm.cmd install' : 'npm install';
 const child = spawnSync(npmCmd, {
   shell: true,

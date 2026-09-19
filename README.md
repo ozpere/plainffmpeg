@@ -38,9 +38,11 @@ npm start
 ```
 
 `install:win` forces CPU-only LLM binaries (skipping the Vulkan dead end),
-runs the preflight checks, and verifies the native binary loads.
-The model downloads automatically on first install via `postinstall`
-(`npm run download-model` anytime; skipped when offline).
+runs the preflight checks, and verifies the native binary loads. It skips
+the ~1.3 GB model fetch by default (fast, offline-friendly installs) -
+first launch downloads it in-app, or run `npm run download-model` anytime
+(`SKIP_MODEL_DOWNLOAD=0` fetches during install). Plain `npm install`
+still fetches via `postinstall`, skipped when offline.
 
 ## Windows installer
 

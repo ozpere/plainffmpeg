@@ -668,6 +668,7 @@ async function main() {
   const installWin = fs.readFileSync(path.join(__dirname, 'install-windows.js'), 'utf8');
   assert.ok(installWin.includes('could not remove node_modules'), '--clean must report locked dirs instead of crashing');
   assert.ok(installWin.includes('vcruntime140_1.dll'), 'MSVC check must cover vcruntime140_1.dll');
+  assert.ok(installWin.includes("SKIP_MODEL_DOWNLOAD: process.env.SKIP_MODEL_DOWNLOAD ?? '1'"), 'install must defer the model fetch by default');
   assert.ok(renderer.includes('AI model path:'), 'resolved model path must be logged at boot');
   console.log('[smoke] packaging OK');
 
