@@ -349,6 +349,10 @@ async function main() {
   for (const ch of ['model-status', 'translate-prompt', 'download-model', 'pick-file', 'pick-output', 'output-exists', 'save-dropped-file', 'open-path', 'window-min', 'window-max', 'window-close', 'probe-media', 'run-ffmpeg']) {
     assert.ok(mainSrc.includes(`ipcMain.handle('${ch}'`), `main missing handler ${ch}`);
   }
+  // Subscribers must not leak the emitter: returning ipcRenderer.on(...)
+  // would hand the page full invoke/send past the allowlist.
+  assert.ok(preload.includes('removeListener'), 'preload subscribers must return an unsubscribe function');
+  assert.ok(!preload.includes('=> ipcRenderer.on('), 'preload must not return ipcRenderer.on() directly');
   assert.ok(!preload.includes('confirmOverwrite'), 'native confirm dialog must be gone (in-app modal instead)');
   assert.ok(html.includes('errorBanner'), 'UI must have an error banner');
   assert.ok(renderer.includes('errorBanner'), 'renderer must surface LLM errors, not fallback');
@@ -741,6 +745,10 @@ async function main() {
   assert.ok(/\.btn-row\s*{[^}]*justify-content:\s*center/.test(css), 'action buttons must be centered');
   assert.ok(renderer.includes('pathsFromUriList'), 'drop must fall back to text/uri-list');
   assert.ok(renderer.includes('probeMedia'), 'renderer must probe media at load');
+  // Switching videos must invalidate the previous translation - running a
+  // stale command against the new file is the worst outcome here.
+  assert.ok(renderer.includes('outputFile = null'), 'loading a video must clear the previous output');
+  assert.ok(renderer.includes("'Idle'"), 'loading a video must reset progress statuses to Idle');
   assert.ok(renderer.includes('/^\\/([A-Za-z]:\\/)/'), 'uri-list drops must strip the slash before drive letters');
   assert.ok(renderer.includes('toFileUrl'), 'preview URLs must be safely encoded');
   assert.ok(renderer.includes('preview.src = toFileUrl(p)'), 'preview must use encoded URLs');

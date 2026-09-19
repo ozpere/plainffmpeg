@@ -224,6 +224,20 @@
     inputFile = p;
     mediaDuration = null;
     outputManual = false;
+    // A new (or cleared) input invalidates the previous translation: keep
+    // no stale command, output, or statuses around to run by accident.
+    outputFile = null;
+    lastArgs = null;
+    clearError();
+    engineNote.textContent = '';
+    cmdOut.textContent = '-';
+    runBtn.disabled = true;
+    translateStatus.textContent = 'Idle';
+    ffmpegStatus.textContent = 'Idle';
+    barTranslate.classList.remove('indeterminate');
+    barFfmpeg.classList.remove('indeterminate');
+    barTranslate.style.width = '0%';
+    barFfmpeg.style.width = '0%';
     if (!p) {
       fileLabel.textContent = 'No file selected';
       fileLabel.classList.remove('loaded');
