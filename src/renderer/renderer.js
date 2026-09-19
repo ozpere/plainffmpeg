@@ -327,6 +327,7 @@
     }
     clearError();
     translateBtn.disabled = true;
+    translateOnlyBtn.disabled = true;
     barTranslate.classList.add('indeterminate');
     barTranslate.style.width = '100%';
     translateStatus.textContent = 'Translating…';
@@ -371,6 +372,7 @@
       return null;
     } finally {
       translateBtn.disabled = false;
+      translateOnlyBtn.disabled = false;
     }
   }
 

@@ -477,7 +477,25 @@ function looksLikeFileToken(tok) {
 function ensureOutputFile(args, instruction) {
   const corrections = [];
   if (!Array.isArray(args) || args.length === 0) return { args, corrections };
-  if (looksLikeFileToken(args[args.length - 1])) return { args, corrections };
+  const out = [...args];
+  // Truncated answer ending on a valued flag (e.g. "... -movflags" with no
+  // output yet): the appended filename would be swallowed as the flag's
+  // value, so drop the dangling flag first. Valueless flags (-y, -an, -vn)
+  // are kept - they are complete on their own.
+  const valuedFlags = new Set([
+    '-i', '-ss', '-t', '-s', '-video_size', '-vf', '-filter:v', '-filter:a',
+    '-filter_complex', '-c', '-c:v', '-c:a', '-b:v', '-b:a', '-maxrate',
+    '-bufsize', '-ac', '-ar', '-r', '-pix_fmt', '-crf', '-preset', '-tune',
+    '-movflags', '-map', '-pass', '-passlogfile', '-f',
+  ]);
+  const dropped = [];
+  while (out.length > 0 && valuedFlags.has(out[out.length - 1])) {
+    dropped.unshift(out.pop());
+  }
+  if (dropped.length > 0) {
+    corrections.push(`Dropped dangling ${dropped.join(', ')} (truncated answer left a flag with no value)`);
+  }
+  if (looksLikeFileToken(out[out.length - 1])) return { args: out, corrections };
   const text = String(instruction || '').toLowerCase();
   const wordExt =
     /\bmkv\b/.test(text) ? '.mkv'
@@ -488,12 +506,12 @@ function ensureOutputFile(args, instruction) {
     : /\bavi\b/.test(text) ? '.avi'
     : /\bmp4\b/.test(text) ? '.mp4'
     : null;
-  const joined = args.join(' ').toLowerCase();
+  const joined = out.join(' ').toLowerCase();
   const hintExt = wordExt
     || (joined.includes('libvpx-vp9') || joined.includes('libopus') ? '.webm' : null)
     || (joined.includes('libmp3lame') || /\s-vn(\s|$)/.test(joined + ' ') ? '.mp3' : null)
     || '.mp4';
-  const out = [...args, `output${hintExt}`];
+  out.push(`output${hintExt}`);
   corrections.push(`LLM omitted the output file - appended output${hintExt}`);
   return { args: out, corrections };
 }

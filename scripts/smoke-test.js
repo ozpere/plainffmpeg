@@ -19,7 +19,7 @@ const required = [
   'assets/icon.ico',
   'assets/icon.icns',
   'assets/vc-redist.nsh',
-  '.github/workflows/release-win.yml',
+  '.github/workflows/release.yml',
 ];
 
 async function main() {
@@ -84,6 +84,15 @@ async function main() {
   eo = mainMod.ensureOutputFile(['-i', 'in.mp4', 'out.mkv'], 'convert to mkv');
   assert.deepStrictEqual(eo.args, ['-i', 'in.mp4', 'out.mkv'], 'complete commands untouched');
   assert.strictEqual(eo.corrections.length, 0);
+  // truncated answer ending on a valued flag: the flag is dropped so the
+  // appended output is not swallowed as its value
+  eo = mainMod.ensureOutputFile(['-i', 'in.mp4', '-c:v', 'libx264', '-movflags'], 'convert to mp4');
+  assert.deepStrictEqual(eo.args, ['-i', 'in.mp4', '-c:v', 'libx264', 'output.mp4']);
+  assert.strictEqual(eo.corrections.length, 2, 'drop plus append are both reported');
+  // valueless trailing flags are complete on their own and stay
+  eo = mainMod.ensureOutputFile(['-i', 'in.mp4', '-c:v', 'libx264', '-an'], 'convert to mp4 and mute it');
+  assert.deepStrictEqual(eo.args, ['-i', 'in.mp4', '-c:v', 'libx264', '-an', 'output.mp4']);
+  assert.strictEqual(eo.corrections.length, 1);
 
   // tokenizer: quotes preserved
   assert.deepStrictEqual(

@@ -66,7 +66,7 @@ Notes:
 
 - `fetch-vc-redist` downloads the Microsoft C++ runtime so the installer
   can set it up silently (the local AI engine needs it on stock Windows).
-- Windows releases are also built by CI (`.github/workflows/release-win.yml`,
+- Windows releases are also built by CI (`.github/workflows/release.yml`,
   manual run or a `v*` tag) and uploaded as artifacts.
 - `npm run dist:linux` builds an `x86_64.AppImage` (also built by CI).
   No extra runtime is needed on Linux.

@@ -27,7 +27,7 @@ Run `npm test` plus `npm run test:headless` after every change. Smoke test is th
 ## Layout
 
 ```
-src/main.js              Main process: LLM engine, SYSTEM_PROMPT, 6 fixup layers, probe, run, IPC handlers
+src/main.js              Main process: LLM engine, SYSTEM_PROMPT, fixup layers, probe, run, IPC handlers
 src/preload.js           contextBridge API, must mirror IPC channels 1:1
 src/renderer/renderer.js UI logic: load, probe, translate, run, drag-drop, modals, badges, model download
 src/renderer/index.html  UI structure, frameless titlebar, split progress bars, model download card
@@ -35,7 +35,7 @@ src/renderer/styles.css  Warm-charcoal theme, no gradients
 scripts/download-model.js GGUF fetcher, resumable (TARGET is models/model.gguf, shared by main via downloadTo)
 scripts/fetch-vc-redist.js MSVC redist fetcher for the installer (not committed)
 assets/vc-redist.nsh     NSIS hooks: silent MSVC redist install (`customInstall`, needs vc_redist.x64.exe beside it at build) and model-data cleanup on uninstall (`customUnInstall` removes `%APPDATA%\PlainFFmpeg`)
-.github/workflows/release-win.yml Windows CI: install, checks, dist:win, upload exes
+.github/workflows/release.yml Windows CI: install, checks, dist:win, dist:linux, upload exes
 scripts/install-windows.js CPU-only install helper
 scripts/smoke-test.js    Headless contract, asserts behavior not just syntax
 models/                  Weights only (gitignored). Keep models/.gitkeep.
@@ -85,7 +85,7 @@ Order is fixed in `handleTranslatePrompt`:
 
 - `install-windows.js` forces `NODE_LLAMA_CPP_GPU=false` (skips Vulkan dead end), enables `git core.longpaths true`, warns if project path is long (use `C:\plainffmpeg`), checks MSVC DLLs, verifies native binary loads with dynamic `import()`.
 - `SKIP_MODEL_DOWNLOAD=1` skips the ~1 GB fetch for offline/CI smoke runs.
-- Windows releases (`.github/workflows/release-win.yml`, manual or `v*` tag): `fetch-vc-redist`, `install:win`, checks, `dist:win`, upload exes. Linux AppImage (`dist:linux`) builds in the same workflow on `ubuntu-22.04`. electron-builder config lives in `package.json` (`build`): NSIS per-user + portable x64, AppImage x64, `asarUnpack` for `@node-llama-cpp` and `ffmpeg-static`, `npmRebuild: false`, NSIS `include` runs the bundled `vc_redist` silently. The unsigned build triggers SmartScreen; signing is a future paid step.
+- Windows releases (`.github/workflows/release.yml`, manual or `v*` tag): `fetch-vc-redist`, `install:win`, checks, `dist:win`, upload exes. Linux AppImage (`dist:linux`) builds in the same workflow on `ubuntu-22.04`. electron-builder config lives in `package.json` (`build`): NSIS per-user + portable x64, AppImage x64, `asarUnpack` for `@node-llama-cpp` and `ffmpeg-static`, `npmRebuild: false`, NSIS `include` runs the bundled `vc_redist` silently. The unsigned build triggers SmartScreen; signing is a future paid step.
 
 ## Adding a fixup
 
