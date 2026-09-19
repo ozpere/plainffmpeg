@@ -342,6 +342,7 @@
         barTranslate.classList.remove('indeterminate');
         barTranslate.style.width = '0%';
         translateStatus.textContent = 'Failed';
+        if (res && res.raw) log('raw LLM output (truncated): ' + String(res.raw).slice(0, 800));
         showError((res && res.error) || 'unknown error');
         return null;
       }

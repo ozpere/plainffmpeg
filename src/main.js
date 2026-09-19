@@ -27,7 +27,11 @@ try {
 
 let ffmpegPath;
 try {
-  ffmpegPath = require('ffmpeg-static');
+  const rawFfmpegPath = require('ffmpeg-static');
+  // Packaged apps extract the binary next to the asar (see build.asarUnpack),
+  // but child_process.spawn cannot execute inside an asar archive - rewrite.
+  // No-op in dev (no app.asar segment in the path).
+  ffmpegPath = String(rawFfmpegPath || '').replace('app.asar', 'app.asar.unpacked');
 } catch (e) {
   console.error('[main] ffmpeg-static not available:', e.message);
   ffmpegPath = null;
@@ -82,6 +86,7 @@ const SYSTEM_PROMPT = [
   '',
   'CONTAINERS AND CODECS:',
   '- mp4/mov: `-c:v libx264 -c:a aac`, plus `-movflags +faststart` for mp4/mov.',
+  '- h265/HEVC: `-c:v libx265` (mp4/mov keep `-c:a aac -movflags +faststart`).',
   '- mkv: `-c:v libx264 -c:a aac` (or `-c:a copy` if the audio is untouched).',
   '- webm: `-c:v libvpx-vp9 -c:a libopus`. NEVER libvpx+libvorbis.',
   '- gif: `-vf "fps=10,scale=480:-1:flags=lanczos"` and NO audio stream.',

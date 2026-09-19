@@ -309,6 +309,7 @@ async function main() {
     assert.ok(!content.includes('window.alert'), `${f} must not use native alerts`);
   }
   assert.ok(renderer.includes('prettyLlmError'), 'known errors must be translated to plain language');
+  assert.ok(renderer.includes('raw LLM output (truncated)'), 'failures must log the raw model output');
   assert.ok(renderer.includes('NoBinaryFoundError'), 'binary-missing must have a friendly message');
   assert.ok(renderer.includes('showBanner'), 'errors must surface through the themed banner');
   console.log('[smoke] themed errors OK');
@@ -353,6 +354,8 @@ async function main() {
   e = mainMod.enforceOutputExtension('/v/output', ['-i', 'in.mp4', 'out.mkv']);
   assert.strictEqual(e.path, '/v/output.mkv');
   console.log('[smoke] output extension enforcement OK');
+  // packaged apps run ffmpeg from beside the asar (spawn cannot use asar paths)
+  assert.ok(mainSrc.includes("replace('app.asar', 'app.asar.unpacked')"), 'ffmpeg path must be unpacked for spawn');
   // main must force overwrite (-y) - tested via source since spawn needs ffmpeg
   assert.ok(mainSrc.includes("finalArgs.unshift('-y')"), 'run must force -y overwrite');
   // no File/Edit/View menu bar
@@ -619,6 +622,7 @@ async function main() {
   assert.ok(mainMod.SYSTEM_PROMPT.includes('scale=-2:720'), 'prompt must teach scale shorthands');
   assert.ok(mainMod.SYSTEM_PROMPT.includes('duration - N'), 'prompt must teach last-N arithmetic');
   assert.ok(mainMod.SYSTEM_PROMPT.includes('libvpx-vp9'), 'prompt must pin webm codecs');
+  assert.ok(mainMod.SYSTEM_PROMPT.includes('libx265'), 'prompt must cover h265');
   assert.ok(mainMod.SYSTEM_PROMPT.includes('EXAMPLES'), 'prompt must carry few-shot examples');
   assert.ok(mainMod.SYSTEM_PROMPT.includes('Never invent'), 'prompt must forbid inventing paths');
   assert.ok(mainMod.SYSTEM_PROMPT.includes('non-thinking mode'), 'prompt must disable Qwen3 thinking traces');
