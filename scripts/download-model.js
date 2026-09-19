@@ -31,15 +31,28 @@ function exists(p) {
   }
 }
 
-async function downloadTo(url, dest, { onProgress } = {}) {
+async function downloadTo(url, dest, { onProgress, _retried } = {}) {
   console.log(`[download-model] fetching ${url}`);
   const tmp = dest + '.part';
+  const sidecar = dest + '.source';
   // Resume a previous partial download when the server honors ranges.
   let start = 0;
   try {
     const st = fs.statSync(tmp);
     if (st.isFile() && st.size > 0) start = st.size;
   } catch { /* no partial file - start from zero */ }
+  if (start > 0) {
+    // A partial from a DIFFERENT source must never be resumed: the origins
+    // serve different bytes, so resuming splices a corrupt file.
+    let owner = null;
+    try { owner = fs.readFileSync(sidecar, 'utf8'); } catch { /* legacy part - assume same source */ }
+    if (owner !== null && owner !== url) {
+      console.log('[download-model] partial file is from another source - restarting.');
+      try { fs.rmSync(tmp, { force: true }); } catch { /* ignore */ }
+      start = 0;
+    }
+  }
+  try { fs.writeFileSync(sidecar, url); } catch { /* tracking only - download works without it */ }
   const headers = {};
   if (start > 0) headers.Range = `bytes=${start}-`;
   const res = await fetch(url, { redirect: 'follow', headers });
@@ -52,6 +65,17 @@ async function downloadTo(url, dest, { onProgress } = {}) {
     throw new Error(`HTTP ${res.status} ${res.statusText} for ${url}`);
   }
   let resume = res.status === 206;
+  if (resume && start > 0 && !_retried) {
+    // The server must continue where asked - a 206 starting elsewhere would
+    // splice corrupt bytes on append, so restart once instead.
+    const m = /bytes\s+(\d+)-/i.exec(res.headers.get('content-range') || '');
+    if (m && parseInt(m[1], 10) !== start) {
+      console.log(`[download-model] server resumed at ${m[1]} instead of ${start} - restarting.`);
+      try { if (res.body && res.body.cancel) await res.body.cancel(); } catch { /* ignore */ }
+      try { fs.rmSync(tmp, { force: true }); } catch { /* ignore */ }
+      return downloadTo(url, dest, { onProgress, _retried: true });
+    }
+  }
   if (!resume && start > 0) {
     // Server ignored Range - restarting avoids a corrupt splice.
     try { fs.rmSync(tmp, { force: true }); } catch { /* ignore */ }
@@ -69,18 +93,28 @@ async function downloadTo(url, dest, { onProgress } = {}) {
   };
   report();
   const reader = res.body.getReader();
-  for (;;) {
-    const { done: end, value } = await reader.read();
-    if (end) break;
-    done += value.length;
-    await new Promise((resolve, reject) => file.write(value, (e) => (e ? reject(e) : resolve())));
-    if (total && done % (50 * 1024 * 1024) < value.length) {
-      console.log(`[download-model] ${(done / 1e6).toFixed(1)} / ${(total / 1e6).toFixed(1)} MB`);
+  let streamErr = null;
+  try {
+    for (;;) {
+      const { done: end, value } = await reader.read();
+      if (end) break;
+      done += value.length;
+      await new Promise((resolve, reject) => file.write(value, (e) => (e ? reject(e) : resolve())));
+      if (total && done % (50 * 1024 * 1024) < value.length) {
+        console.log(`[download-model] ${(done / 1e6).toFixed(1)} / ${(total / 1e6).toFixed(1)} MB`);
+      }
+      report();
     }
-    report();
+  } catch (e) {
+    streamErr = e;
   }
   await new Promise((resolve) => file.close(resolve));
+  if (total > 0 && done !== total) {
+    throw new Error(`incomplete download (${done} of ${total} bytes) - try again to resume.`);
+  }
+  if (streamErr) throw streamErr;
   fs.renameSync(tmp, dest);
+  try { fs.rmSync(sidecar, { force: true }); } catch { /* ignore */ }
   console.log(`[download-model] saved ${dest} (${(done / 1e6).toFixed(1)} MB)`);
   report();
   return { bytes: done, total };
@@ -88,6 +122,7 @@ async function downloadTo(url, dest, { onProgress } = {}) {
 
 async function main() {
   const checkOnly = process.argv.includes('--check-only');
+  const bestEffort = process.argv.includes('--best-effort');
   if (exists(TARGET) || exists(ALIAS)) {
     console.log('[download-model] model already present, skipping.');
     return;
@@ -123,6 +158,12 @@ async function main() {
   }
   console.error('[download-model] All sources failed. Translations will report an error until a model is present.');
   console.error('[download-model] Manually place a GGUF at ./models/model.gguf');
+  if (bestEffort) {
+    // Postinstall path: the app works model-less (probe/FFmpeg run fine),
+    // so an offline install must warn and continue instead of failing.
+    console.error('[download-model] --best-effort: continuing without a model.');
+    return;
+  }
   process.exitCode = 1;
   if (process.env.CI) process.exit(1);
 }

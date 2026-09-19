@@ -662,9 +662,106 @@ async function main() {
     } finally {
       fs.rmSync(dest, { force: true });
       fs.rmSync(dest + '.part', { force: true });
+      fs.rmSync(dest + '.source', { force: true });
       srv.close();
     }
     console.log('[smoke] resumable download OK');
+  }
+  // resume integrity: a lying 206, a foreign partial, and a truncated
+  // stream must never produce a spliced or short file.
+  {
+    const http = require('http');
+    const dl = require('../scripts/download-model.js');
+    // 1. Server claims 206 from offset 0 while resume asked further ahead:
+    // restart from zero instead of appending.
+    {
+      const PAYLOAD = Buffer.alloc(64 * 1024, 0xcd);
+      let ranged = false;
+      const srv = http.createServer((req, res) => {
+        if (req.headers.range && !ranged) {
+          ranged = true;
+          res.writeHead(206, {
+            'Content-Length': PAYLOAD.length,
+            'Content-Range': `bytes 0-${PAYLOAD.length - 1}/${PAYLOAD.length}`,
+            'Accept-Ranges': 'bytes',
+          });
+          res.end(PAYLOAD);
+        } else {
+          res.writeHead(200, { 'Content-Length': PAYLOAD.length, 'Accept-Ranges': 'bytes' });
+          res.end(PAYLOAD);
+        }
+      });
+      await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+      const url = `http://127.0.0.1:${srv.address().port}/model.gguf`;
+      const dest = path.join(__dirname, 'smoke-model-range.tmp');
+      try {
+        fs.writeFileSync(dest + '.part', PAYLOAD.slice(0, 1024));
+        fs.writeFileSync(dest + '.source', url);
+        await dl.downloadTo(url, dest, {});
+        assert.deepStrictEqual(fs.readFileSync(dest), PAYLOAD, 'lying 206 must restart, not splice');
+      } finally {
+        fs.rmSync(dest, { force: true });
+        fs.rmSync(dest + '.part', { force: true });
+        fs.rmSync(dest + '.source', { force: true });
+        srv.close();
+      }
+    }
+    // 2. Partial file from another source: restart, send no Range.
+    {
+      const PAYLOAD_B = Buffer.alloc(64 * 1024, 0xbb);
+      let sawRange = false;
+      const srv = http.createServer((req, res) => {
+        if (req.headers.range) sawRange = true;
+        res.writeHead(200, { 'Content-Length': PAYLOAD_B.length, 'Accept-Ranges': 'bytes' });
+        res.end(PAYLOAD_B);
+      });
+      await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+      const dest = path.join(__dirname, 'smoke-model-xsrc.tmp');
+      try {
+        fs.writeFileSync(dest + '.part', Buffer.alloc(32 * 1024, 0xaa));
+        fs.writeFileSync(dest + '.source', 'http://other-source/model.gguf');
+        await dl.downloadTo(`http://127.0.0.1:${srv.address().port}/model.gguf`, dest, {});
+        assert.strictEqual(sawRange, false, 'foreign partial must not be resumed');
+        assert.deepStrictEqual(fs.readFileSync(dest), PAYLOAD_B, 'foreign bytes must never splice in');
+      } finally {
+        fs.rmSync(dest, { force: true });
+        fs.rmSync(dest + '.part', { force: true });
+        fs.rmSync(dest + '.source', { force: true });
+        srv.close();
+      }
+    }
+    // 3. Truncated stream: throw, keep the partial for resume, stage no file.
+    {
+      const PAYLOAD = Buffer.alloc(64 * 1024, 0xef);
+      const srv = http.createServer((req, res) => {
+        res.writeHead(200, { 'Content-Length': PAYLOAD.length + 1000, 'Accept-Ranges': 'bytes' });
+        res.end(PAYLOAD);
+      });
+      await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+      const dest = path.join(__dirname, 'smoke-model-trunc.tmp');
+      try {
+        await assert.rejects(
+          dl.downloadTo(`http://127.0.0.1:${srv.address().port}/model.gguf`, dest, {}),
+          /incomplete/,
+          'truncated stream must throw instead of staging a short file'
+        );
+        assert.strictEqual(fs.existsSync(dest), false, 'truncated download must not be staged');
+        assert.ok(fs.existsSync(dest + '.part'), 'truncated partial stays for resume');
+      } finally {
+        fs.rmSync(dest, { force: true });
+        fs.rmSync(dest + '.part', { force: true });
+        fs.rmSync(dest + '.source', { force: true });
+        srv.close();
+      }
+    }
+    console.log('[smoke] resume integrity OK');
+  }
+  // offline installs must warn and continue: the app works model-less.
+  {
+    const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
+    assert.ok(pkg.scripts.postinstall.includes('--best-effort'), 'postinstall must not fail offline installs');
+    const dlSrc = fs.readFileSync(path.join(__dirname, 'download-model.js'), 'utf8');
+    assert.ok(dlSrc.includes('--best-effort'), 'downloader must support best-effort installs');
   }
   const css = fs.readFileSync(path.join(__dirname, '../src/renderer/styles.css'), 'utf8');
   assert.ok(css.includes('.model-dl[hidden]'), 'download card must honor hidden');
