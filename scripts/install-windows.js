@@ -73,7 +73,7 @@ try {
 // --- preflight: MSVC runtime hint --------------------------------------------
 if (IS_WIN) {
   const sysRoot = process.env.SystemRoot || 'C:\\Windows';
-  const crt = ['msvcp140.dll', 'vcruntime140.dll'].map((d) =>
+  const crt = ['msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll'].map((d) =>
     path.join(sysRoot, 'System32', d)
   );
   const missing = crt.filter((p) => !fs.existsSync(p));
@@ -95,7 +95,13 @@ if (CLEAN && !CHECK_ONLY) {
   const nm = path.join(ROOT, 'node_modules');
   if (fs.existsSync(nm)) {
     log('removing node_modules (fixes EPERM / locked-dir retries)...');
-    fs.rmSync(nm, { recursive: true, force: true });
+    try {
+      fs.rmSync(nm, { recursive: true, force: true });
+    } catch (e) {
+      console.error(`[install:win] could not remove node_modules: ${(e && e.message) || e}`);
+      console.error('[install:win] Close editors and terminals holding files open, then re-run with --clean.');
+      process.exit(1);
+    }
   }
 }
 

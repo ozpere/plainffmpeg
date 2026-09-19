@@ -616,6 +616,13 @@ async function main() {
   assert.ok(nsh.includes('customUnInstall'), 'installer must clean up on uninstall');
   assert.ok(nsh.includes('RMDir /r "$APPDATA\\PlainFFmpeg"'), 'uninstall must remove the model data dir');
   assert.ok(nsh.includes('RMDir /r "$LOCALAPPDATA\\plainffmpeg-updater"'), 'uninstall must remove the staged installer copy');
+  // redist failures must warn, never pass silently: only 0/1638/3010 are success.
+  assert.ok(nsh.includes('1638') && nsh.includes('3010'), 'installer must allowlist the benign redist exit codes');
+  assert.ok(nsh.includes('MessageBox'), 'redist failure must warn instead of going green');
+  // install helper must survive locked dirs and check the full CRT set.
+  const installWin = fs.readFileSync(path.join(__dirname, 'install-windows.js'), 'utf8');
+  assert.ok(installWin.includes('could not remove node_modules'), '--clean must report locked dirs instead of crashing');
+  assert.ok(installWin.includes('vcruntime140_1.dll'), 'MSVC check must cover vcruntime140_1.dll');
   assert.ok(renderer.includes('AI model path:'), 'resolved model path must be logged at boot');
   console.log('[smoke] packaging OK');
 
