@@ -24,7 +24,7 @@
       <p class="sub">100% offline · on-device LLM · no cloud, no accounts.</p>
     </div>
   </div>
-  <div id="engineBadge" class="badge">checking engine…</div>
+  <div id="engineBadge" class="badge" aria-live="polite">checking engine…</div>
 </header>
 
 <main>
@@ -38,12 +38,12 @@
       <button id="modelDlBtn" type="button" class="primary">Download AI model</button>
     </div>
     <div class="progress" hidden id="modelDlBarWrap"><div id="barModel"></div></div>
-    <span id="modelDlStatus" class="progress-status"></span>
+    <span id="modelDlStatus" class="progress-status" aria-live="polite"></span>
   </section>
 
   <section id="dropzone" class="card" tabindex="0" aria-label="Drag and drop video area">
     <div class="dz-inner">
-      <div class="dz-icon">📥</div>
+      <div class="dz-icon" aria-hidden="true">📥</div>
       <p id="dzPrompt"><strong>Drag &amp; drop a video here</strong> or</p>
       <button id="browseBtn" type="button">Browse…</button>
       <p id="fileLabel" class="file-label">No file selected</p>
@@ -74,19 +74,19 @@
 
   <section>
     <label for="cmdOut">Translated FFmpeg command</label>
-    <div id="errorBanner" class="error-banner" hidden></div>
+    <div id="errorBanner" class="error-banner" role="alert" hidden></div>
     <pre id="cmdOut" class="cmd">-</pre>
-    <p id="engineNote" class="note"></p>
+    <p id="engineNote" class="note" aria-live="polite"></p>
   </section>
 
   <section class="progress-grid">
     <div class="progress-item">
-      <div class="progress-head"><label>Translation</label><span id="translateStatus" class="progress-status">Idle</span></div>
-      <div class="progress"><div id="barTranslate"></div></div>
+      <div class="progress-head"><label>Translation</label><span id="translateStatus" class="progress-status" aria-live="polite">Idle</span></div>
+      <div class="progress" role="progressbar" aria-label="Translation progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="barTranslate"></div></div>
     </div>
     <div class="progress-item">
-      <div class="progress-head"><label>FFmpeg</label><span id="ffmpegStatus" class="progress-status">Idle</span></div>
-      <div class="progress"><div id="barFfmpeg"></div></div>
+      <div class="progress-head"><label>FFmpeg</label><span id="ffmpegStatus" class="progress-status" aria-live="polite">Idle</span></div>
+      <div class="progress" role="progressbar" aria-label="FFmpeg progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="barFfmpeg"></div></div>
     </div>
   </section>
 

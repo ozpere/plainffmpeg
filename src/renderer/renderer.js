@@ -178,6 +178,22 @@
     engineBadge.classList.toggle('error', state === 'error');
   }
 
+  // Progress bars: width and the matching ARIA value move together so both
+  // stay truthful. null means indeterminate (pulsing, no percentage).
+  function paintBar(bar, pct) {
+    const wrap = bar.parentElement;
+    if (pct === null || pct === undefined) {
+      bar.classList.add('indeterminate');
+      bar.style.width = '100%';
+      if (wrap) { wrap.setAttribute('aria-busy', 'true'); wrap.removeAttribute('aria-valuenow'); }
+      return;
+    }
+    const v = Math.max(0, Math.min(100, Number(pct) || 0));
+    bar.classList.remove('indeterminate');
+    bar.style.width = v + '%';
+    if (wrap) { wrap.removeAttribute('aria-busy'); wrap.setAttribute('aria-valuenow', String(Math.floor(v))); }
+  }
+
   // In-app confirm with dynamic copy (overwrite prompt, storage consent).
   // Calls serialize through a queue: overlapping prompts show one after
   // another instead of clobbering each other's copy and listeners.
@@ -194,17 +210,31 @@
       confirmMsg.textContent = message;
       confirmOk.textContent = okLabel;
       confirmOverlay.hidden = false;
+      // Park background interaction and remember focus: Tab stays inside
+      // the modal, and focus returns where it was afterwards.
+      const previouslyFocused = document.activeElement;
+      const chrome = [document.querySelector('header'), document.querySelector('main'), document.getElementById('titlebar')];
+      for (const el of chrome) { if (el) { try { el.inert = true; } catch { /* ignore */ } } }
       const done = (v) => {
         confirmOverlay.hidden = true;
+        for (const el of chrome) { if (el) { try { el.inert = false; } catch { /* ignore */ } } }
         confirmOk.removeEventListener('click', onOk);
         confirmCancel.removeEventListener('click', onCancel);
         window.removeEventListener('keydown', onKey);
         confirmOverlay.removeEventListener('click', onBackdrop);
+        try { if (previouslyFocused && previouslyFocused.focus) previouslyFocused.focus(); } catch { /* ignore */ }
         resolve(v);
       };
       const onOk = () => done(true);
       const onCancel = () => done(false);
-      const onKey = (e) => { if (e.key === 'Escape') done(false); };
+      const onKey = (e) => {
+        if (e.key === 'Escape') { done(false); return; }
+        if (e.key === 'Tab') {
+          const order = [confirmCancel, confirmOk];
+          if (e.shiftKey && document.activeElement === order[0]) { e.preventDefault(); order[1].focus(); }
+          else if (!e.shiftKey && document.activeElement === order[1]) { e.preventDefault(); order[0].focus(); }
+        }
+      };
       const onBackdrop = (e) => { if (e.target === confirmOverlay) done(false); };
       confirmOk.addEventListener('click', onOk);
       confirmCancel.addEventListener('click', onCancel);
@@ -253,10 +283,8 @@
     runBtn.disabled = true;
     translateStatus.textContent = 'Idle';
     ffmpegStatus.textContent = 'Idle';
-    barTranslate.classList.remove('indeterminate');
-    barFfmpeg.classList.remove('indeterminate');
-    barTranslate.style.width = '0%';
-    barFfmpeg.style.width = '0%';
+    paintBar(barTranslate, 0);
+    paintBar(barFfmpeg, 0);
     if (!p) {
       fileLabel.textContent = 'No file selected';
       fileLabel.classList.remove('loaded');
@@ -397,8 +425,7 @@
     translateBtn.disabled = true;
     translateOnlyBtn.disabled = true;
     runBtn.disabled = true;
-    barTranslate.classList.add('indeterminate');
-    barTranslate.style.width = '100%';
+    paintBar(barTranslate, null);
     translateStatus.textContent = 'Translating…';
     log(`translating: "${text}" …`);
     try {
@@ -408,8 +435,7 @@
         lastArgs = null;
         runBtn.disabled = true;
         cmdOut.textContent = '-';
-        barTranslate.classList.remove('indeterminate');
-        barTranslate.style.width = '0%';
+        paintBar(barTranslate, 0);
         translateStatus.textContent = 'Failed';
         if (res && res.raw) log('raw LLM output (truncated): ' + String(res.raw).slice(0, 800));
         if (res && res.hint) log(res.hint);
@@ -429,16 +455,14 @@
       log(`translated [${res.engine}]: ffmpeg ${res.argsString}`);
       refreshOutputDisplay();
       log(`output → ${effectiveOutput() || '(none yet - select an input video)'}`);
-      barTranslate.classList.remove('indeterminate');
-      barTranslate.style.width = '100%';
+      paintBar(barTranslate, 100);
       translateStatus.textContent = 'Done';
       runBtn.disabled = !lastArgs;
       return res;
     } catch (e) {
       lastArgs = null;
       runBtn.disabled = true;
-      barTranslate.classList.remove('indeterminate');
-      barTranslate.style.width = '0%';
+      paintBar(barTranslate, 0);
       translateStatus.textContent = 'Failed';
       showError((e && e.message ? e.message : e) || 'unknown error');
       return null;
@@ -478,13 +502,12 @@
       log('overwrite check unavailable, continuing: ' + (e && e.message ? e.message : e));
     }
     runBtn.disabled = true;
-    barFfmpeg.classList.remove('indeterminate');
-    barFfmpeg.style.width = '0%';
+    paintBar(barFfmpeg, 0);
     ffmpegStatus.textContent = 'Running…';
     log(`running ffmpeg → ${out}…`);
     try {
       const res = await window.api.runFfmpeg({ args: lastArgs, outputFile: out });
-      barFfmpeg.style.width = '100%';
+      paintBar(barFfmpeg, 100);
       ffmpegStatus.textContent = 'Done';
       log('done → ' + (res && res.output ? res.output : 'ok'));
     } catch (e) {
@@ -724,7 +747,7 @@
   // invoke result is the fallback (either one alone must finish the UI).
   function modelDownloadDone(done, total) {
     modelDownloading = false;
-    barModel.style.width = '100%';
+    paintBar(barModel, 100);
     modelDlStatus.textContent = 'Download complete - engine starting…';
     log('model download complete, engine starting…');
     scheduleRefresh(1500);
@@ -740,7 +763,7 @@
       showBanner('Model download failed: ' + (p.error || 'unknown error'));
     } else if (typeof p.pct === 'number') {
       const pct = Math.max(0, Math.min(100, p.pct));
-      barModel.style.width = pct + '%';
+      paintBar(barModel, pct);
       modelDlStatus.textContent = p.total > 0
         ? `${(p.done / 1e6).toFixed(0)} / ${(p.total / 1e6).toFixed(0)} MB (${Math.floor(pct)}%)`
         : `${(p.done / 1e6).toFixed(0)} MB downloaded`;
@@ -751,7 +774,7 @@
     modelDownloading = true;
     clearError();
     modelDlBarWrap.hidden = false;
-    barModel.style.width = '0%';
+    paintBar(barModel, 0);
     modelDlStatus.textContent = 'Starting download… (resumes if interrupted)';
     log('downloading AI model (~1.3 GB, one-time)…');
     const failDownload = (detail) => {
@@ -790,18 +813,18 @@
   window.api.onProgress((p) => {
     if (!p) return;
     if (p.done) {
-      barFfmpeg.style.width = '100%';
+      paintBar(barFfmpeg, 100);
       if (ffmpegStatus.textContent === 'Running…') {
         ffmpegStatus.textContent = p.code === 0 ? 'Done' : (typeof p.code === 'number' ? `Failed (code ${p.code})` : 'Failed');
       }
     } else if (typeof p.pct === 'number') {
       const pct = Math.max(0, Math.min(100, p.pct));
-      barFfmpeg.style.width = pct + '%';
+      paintBar(barFfmpeg, pct);
       ffmpegStatus.textContent = `${Math.floor(pct)}%`;
     } else {
       // No duration known: creep forward so the bar still feels alive.
       const cur = parseFloat(barFfmpeg.style.width) || 0;
-      barFfmpeg.style.width = Math.min(96, cur + 2) + '%';
+      paintBar(barFfmpeg, Math.min(96, cur + 2));
     }
   });
 

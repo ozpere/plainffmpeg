@@ -800,6 +800,16 @@ async function main() {
   assert.ok(/\.badge\.ready\s*{[^}]*#bfe3b8/i.test(css), 'ready badge must be pastel green');
   assert.ok(/\.badge\.error\s*{[^}]*#f2b8b0/i.test(css), 'error badge must be pastel red');
   assert.ok(css.includes('.overlay') && css.includes('.modal'), 'modal styles must exist');
+  // accessibility: failures announced, progress exposed, modal contained.
+  assert.ok(html.includes('role="alert"'), 'error banner must announce');
+  assert.ok(html.includes('aria-live="polite"'), 'statuses must announce politely');
+  assert.ok(html.includes('role="progressbar"'), 'progress bars must expose role');
+  assert.ok(html.includes('aria-valuenow'), 'progress bars must expose values');
+  assert.ok(html.includes('aria-hidden="true"'), 'decorative icons must hide');
+  assert.ok(renderer.includes('paintBar'), 'bar width and ARIA value must move together');
+  assert.ok(renderer.includes('previouslyFocused'), 'modal must restore focus');
+  assert.ok(renderer.includes('.inert = true'), 'modal must park background interaction');
+  assert.ok(css.includes(':focus-visible'), 'keyboard focus must stay visible');
   assert.ok(html.includes('We ask before overwriting an existing file.'), 'hint must promise the ask');
   // terminal starts empty (nothing is ready before the LLM is)
   const termMatch = /<pre id="terminal"[^>]*>([\s\S]*?)<\/pre>/.exec(html);
