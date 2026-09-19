@@ -40,14 +40,23 @@ function assertPlausibleExe(filePath) {
   }
 }
 
-async function main() {
+// Present redist usable as-is (size and MZ header), or false. A stale or
+// wrong file is removed so the fetch below heals it.
+function existingRedistUsable() {
   try {
-    const st = fs.statSync(DEST);
-    if (st.isFile() && st.size > MIN_BYTES) {
-      console.log('[fetch-vc-redist] already present, skipping.');
-      return;
-    }
-  } catch { /* missing - download below */ }
+    assertPlausibleExe(DEST);
+    return true;
+  } catch {
+    try { fs.rmSync(DEST, { force: true }); } catch { /* ignore */ }
+    return false;
+  }
+}
+
+async function main() {
+  if (existingRedistUsable()) {
+    console.log('[fetch-vc-redist] already present, skipping.');
+    return;
+  }
   // Small file, but aka.ms blips fail the whole Windows release job alone -
   // retry a few times with backoff before giving up.
   let lastErr = null;
@@ -105,4 +114,4 @@ if (require.main === module) {
     process.exit(1);
   });
 }
-module.exports = { DEST, SOURCE, MIN_BYTES, assertPlausibleExe };
+module.exports = { DEST, SOURCE, MIN_BYTES, assertPlausibleExe, existingRedistUsable };

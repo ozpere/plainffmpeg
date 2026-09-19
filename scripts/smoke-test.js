@@ -859,6 +859,39 @@ async function main() {
     }
     console.log('[smoke] format gates OK');
   }
+  // healing: present-but-wrong files must be removed, never trusted.
+  {
+    const dl = require('../scripts/download-model.js');
+    const vc = require('../scripts/fetch-vc-redist.js');
+    assert.strictEqual(typeof dl.fileHasMagic, 'function');
+    assert.strictEqual(typeof dl.takeUsableModel, 'function');
+    assert.strictEqual(typeof vc.existingRedistUsable, 'function');
+    const missing = path.join(__dirname, 'smoke-missing.tmp');
+    assert.strictEqual(dl.fileHasMagic(missing, 'GGUF'), false, 'missing file has no magic');
+    // Corrupt model at the real target: removed, reported unusable.
+    fs.mkdirSync(path.dirname(dl.TARGET), { recursive: true });
+    try {
+      fs.writeFileSync(dl.TARGET, Buffer.alloc(2048, 0x41));
+      assert.strictEqual(dl.takeUsableModel(), null, 'corrupt model must not count as present');
+      assert.strictEqual(fs.existsSync(dl.TARGET), false, 'corrupt model must be removed for re-download');
+      const good = Buffer.concat([Buffer.from('GGUF'), Buffer.alloc(2048, 0x07)]);
+      fs.writeFileSync(dl.TARGET, good);
+      assert.strictEqual(dl.takeUsableModel(), dl.TARGET, 'good model must count as present');
+    } finally {
+      fs.rmSync(dl.TARGET, { force: true });
+    }
+    // Stale redist at the real dest: removed, reported unusable.
+    try {
+      const stale = Buffer.alloc(10 * 1024 * 1024 + 16, 0x41);
+      fs.writeFileSync(vc.DEST, stale);
+      assert.strictEqual(vc.existingRedistUsable(), false, 'non-MZ redist must not count as present');
+      assert.strictEqual(fs.existsSync(vc.DEST), false, 'stale redist must be removed for re-fetch');
+    } finally {
+      fs.rmSync(vc.DEST, { force: true });
+      fs.rmSync(vc.DEST + '.part', { force: true });
+    }
+    console.log('[smoke] healing OK');
+  }
   // offline installs must warn and continue: the app works model-less.
   {
     const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
@@ -988,6 +1021,7 @@ async function main() {
   assert.ok(renderer.includes('toFileUrl'), 'preview URLs must be safely encoded');
   assert.ok(renderer.includes('preview.src = toFileUrl(p)'), 'preview must use encoded URLs');
   assert.ok(renderer.includes('UNC share'), 'UNC shares must map to file://server/…');
+  assert.ok(mainSrc.includes('modelStatCache'), 'model stat must be cached between polls');
   assert.ok(renderer.includes('using the first one only'), 'multi-file drops must say what was ignored');
   assert.ok(renderer.includes('preview cannot play this file'), 'preview failures must explain themselves');
   assert.ok(renderer.includes('Could not open folder'), 'open-folder failure must surface');

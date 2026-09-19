@@ -31,6 +31,35 @@ function exists(p) {
   }
 }
 
+// True when the file starts with the given magic bytes.
+function fileHasMagic(filePath, magic) {
+  const want = Buffer.from(String(magic));
+  let head = Buffer.alloc(0);
+  try {
+    const fd = fs.openSync(filePath, 'r');
+    try {
+      head = Buffer.alloc(want.length);
+      fs.readSync(fd, head, 0, want.length, 0);
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch { /* unreadable counts as mismatch */ }
+  return head.equals(want);
+}
+
+// Present model usable as-is, or null. A present-but-wrong file (HTML error
+// page, truncated junk) is removed so the download below heals it instead
+// of the skip gate trusting it forever.
+function takeUsableModel() {
+  for (const p of [TARGET, ALIAS]) {
+    if (!exists(p)) continue;
+    if (fileHasMagic(p, 'GGUF')) return p;
+    console.log(`[download-model] ${p} failed format check - removing.`);
+    try { fs.rmSync(p, { force: true }); } catch { /* ignore */ }
+  }
+  return null;
+}
+
 async function downloadTo(url, dest, { onProgress, expectMagic, _retried } = {}) {
   console.log(`[download-model] fetching ${url}`);
   const tmp = dest + '.part';
@@ -127,18 +156,7 @@ async function downloadTo(url, dest, { onProgress, expectMagic, _retried } = {})
     if (expectMagic) {
       // Cheap format gate: a GGUF model starts with "GGUF". An HTML error page
       // or wrong file fails here instead of confusing the LLM loader later.
-      const magic = Buffer.from(String(expectMagic));
-      let head = Buffer.alloc(0);
-      try {
-        const fd = fs.openSync(tmp, 'r');
-        try {
-          head = Buffer.alloc(magic.length);
-          fs.readSync(fd, head, 0, magic.length, 0);
-        } finally {
-          fs.closeSync(fd);
-        }
-      } catch { /* unreadable counts as mismatch below */ }
-      if (!head.equals(magic)) {
+      if (!fileHasMagic(tmp, expectMagic)) {
         try { fs.rmSync(tmp, { force: true }); } catch { /* ignore */ }
         throw new Error(`downloaded file failed format check (no "${expectMagic}" header) - removed.`);
       }
@@ -156,7 +174,8 @@ async function downloadTo(url, dest, { onProgress, expectMagic, _retried } = {})
 async function main() {
   const checkOnly = process.argv.includes('--check-only');
   const bestEffort = process.argv.includes('--best-effort');
-  if (exists(TARGET) || exists(ALIAS)) {
+  const present = takeUsableModel();
+  if (present) {
     console.log('[download-model] model already present, skipping.');
     return;
   }
@@ -207,4 +226,4 @@ if (require.main === module) {
     process.exit(1);
   });
 }
-module.exports = { TARGET, ALIAS, SOURCES, MIN_BYTES, downloadTo };
+module.exports = { TARGET, ALIAS, SOURCES, MIN_BYTES, downloadTo, fileHasMagic, takeUsableModel };
