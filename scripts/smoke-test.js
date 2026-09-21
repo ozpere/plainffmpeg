@@ -330,6 +330,40 @@ async function main() {
   let rt = mainMod.fixupRotate(['-i', 'in.mp4', '-vf', 'scale=-2:720', 'out.mp4'], 'rotate 90 degrees');
   assert.deepStrictEqual(rt.args, ['-i', 'in.mp4', '-vf', 'scale=-2:720,transpose=1', 'out.mp4']);
   assert.ok(mainMod.SYSTEM_PROMPT.includes('setpts=(1/X)*PTS'), 'prompt must teach speed filters');
+  // volume: percent, words, existing volume, muted skip
+  assert.strictEqual(typeof mainMod.fixupVolume, 'function');
+  assert.strictEqual(fixupsMod.fixupVolume, mainMod.fixupVolume, 'fixups must be the same functions main re-exports');
+  assert.strictEqual(mainMod.parseVolume('boost the volume'), 1.5);
+  assert.strictEqual(mainMod.parseVolume('make it quieter'), 0.5);
+  assert.strictEqual(mainMod.parseVolume('volume at 150%'), 1.5);
+  assert.strictEqual(mainMod.parseVolume('convert to mp4'), null);
+  let vl = mainMod.fixupVolume(['-i', 'in.mp4', '-c:v', 'libx264', '-c:a', 'aac', 'out.mp4'], 'boost the volume');
+  assert.deepStrictEqual(vl.args, ['-i', 'in.mp4', '-c:v', 'libx264', '-c:a', 'aac', '-af', 'volume=1.5', 'out.mp4']);
+  vl = mainMod.fixupVolume(['-i', 'in.mp4', '-an', 'out.mp4'], 'boost the volume');
+  assert.deepStrictEqual(vl.args, ['-i', 'in.mp4', '-an', 'out.mp4'], 'muted volume stays muted');
+  // gif: defaults filled, audio stripped to -an
+  assert.strictEqual(typeof mainMod.fixupGif, 'function');
+  let gf = mainMod.fixupGif(['-i', 'in.mp4', '-c:v', 'libx264', 'out.gif'], 'convert to gif');
+  assert.deepStrictEqual(gf.args, ['-i', 'in.mp4', '-c:v', 'libx264', '-vf', 'fps=10,scale=480:-1:flags=lanczos', '-an', 'out.gif']);
+  gf = mainMod.fixupGif(['-i', 'in.mp4', '-vf', 'fps=10,scale=480:-1:flags=lanczos', '-c:a', 'aac', 'out.gif'], 'to gif');
+  assert.ok(!gf.args.includes('-c:a') && gf.args.includes('-an'), 'gif audio becomes -an');
+  gf = mainMod.fixupGif(['-i', 'in.mp4', 'out.mp4'], 'convert to mp4');
+  assert.deepStrictEqual(gf.args, ['-i', 'in.mp4', 'out.mp4'], 'non-gif untouched');
+  // thumbnail: time, frame, container, no bitrate
+  assert.strictEqual(typeof mainMod.fixupThumbnail, 'function');
+  assert.strictEqual(mainMod.parseThumbTime('thumbnail at 10 seconds', 60), '10');
+  assert.strictEqual(mainMod.parseThumbTime('thumbnail', 60), '30', 'bare thumbnail uses the middle');
+  let th = mainMod.fixupThumbnail(['-i', 'in.mp4', '-c:v', 'libx264', 'out.mp4'], 'thumbnail at 10 seconds', 60);
+  assert.deepStrictEqual(th.args, ['-i', 'in.mp4', '-c:v', 'libx264', '-ss', '10', '-frames:v', '1', 'out.png']);
+  th = mainMod.fixupThumbnail(['-i', 'in.mp4', '-b:v', '1000k', 'out.mp4'], 'poster frame', 60);
+  assert.ok(!th.args.includes('-b:v') && th.args[th.args.length - 1] === 'out.png', 'still has no bitrate, uses an image container');
+  th = mainMod.fixupThumbnail(['-i', 'in.mp4', 'out.mp4'], 'convert to mp4', 60);
+  assert.deepStrictEqual(th.args, ['-i', 'in.mp4', 'out.mp4'], 'non-thumbnail untouched');
+  // remux intent drops filters instead of replacing the codec
+  const rx = mainMod.fixupConflicts(['-i', 'in.mp4', '-vf', 'scale=-2:720', '-c:v', 'copy', '-c:a', 'copy', 'out.mp4'],
+    'convert mkv to mp4 without re-encoding');
+  assert.deepStrictEqual(rx.args, ['-i', 'in.mp4', '-c:v', 'copy', '-c:a', 'copy', 'out.mp4']);
+  assert.ok(mainMod.SYSTEM_PROMPT.includes('without re-encoding'), 'prompt must teach remux');
   // contradictions ffmpeg rejects: two-pass, -an with audio flags, copy with filters
   assert.strictEqual(typeof mainMod.fixupConflicts, 'function');
   let cf = mainMod.fixupConflicts(['-i', 'in.mp4', '-c:v', 'libx264', '-pass', '1', 'out.mp4']);

@@ -28,7 +28,7 @@ function sanitizeModelOutput(raw) {
     .filter(Boolean);
   // Keep content lines (flags or media paths); drop prose ("Here is…").
   const kept = lines.filter(
-    (l) => /-[a-zA-Z]/.test(l) || /\.(mp4|mkv|webm|mov|avi|gif|mp3)\b/i.test(l)
+    (l) => /-[a-zA-Z]/.test(l) || /\.(mp4|mkv|webm|mov|avi|gif|mp3|png|jpe?g)\b/i.test(l)
   );
   const joined = (kept.length > 0 ? kept : lines).join(' ');
   // Drop a leading "ffmpeg" binary name - renderer prepends the binary path.
@@ -83,6 +83,8 @@ function ensureOutputFile(args, instruction) {
     : /\bmov\b/.test(text) ? '.mov'
     : /\bavi\b/.test(text) ? '.avi'
     : /\bmp4\b/.test(text) ? '.mp4'
+    : /\bpng\b/.test(text) ? '.png'
+    : /\bjpe?g\b/.test(text) ? '.jpg'
     : null;
   const joined = out.join(' ').toLowerCase();
   const hintExt = wordExt
@@ -322,6 +324,27 @@ function appendAudioFilter(out, filter) {
   const i = out.findIndex((t) => t === '-af' || t === '-filter:a');
   if (i !== -1 && typeof out[i + 1] === 'string') out[i + 1] = `${out[i + 1]},${filter}`;
   else insertBeforeOutput(out, '-af', filter);
+}
+
+// Drop valued flags everywhere they appear; returns what was dropped for
+// the correction note (a dangling flag drops alone).
+function dropValuedFlags(out, flags) {
+  const dropped = [];
+  for (const flag of flags) {
+    let idx = out.findIndex((t) => t === flag);
+    while (idx !== -1) {
+      const nx = out[idx + 1];
+      if (nx === undefined || String(nx).startsWith('-')) {
+        out.splice(idx, 1);
+        dropped.push(flag);
+      } else {
+        out.splice(idx, 2);
+        dropped.push(`${flag} ${nx}`);
+      }
+      idx = out.findIndex((t) => t === flag);
+    }
+  }
+  return dropped;
 }
 
 // File-size constraint in the instruction ("below 2GB", "under 500MB",
@@ -657,11 +680,17 @@ function fixupConflicts(args, instruction) {
     for (const f of ['-c:a', '-b:a', '-ac', '-ar', '-af', '-filter:a']) dropValued(f, muted);
   }
   // Stream-copy cannot filter: any video filter requires re-encoding.
+  // Explicit remux intent ("without re-encoding") wins over the filters -
+  // they are dropped. Otherwise the copy is replaced with a real encoder.
   const hasVideoFilter = out.includes('-vf') || out.includes('-filter:v') || out.includes('-filter_complex');
   const cvIdx = out.findIndex((t) => t === '-c:v');
   if (hasVideoFilter && cvIdx !== -1 && String(out[cvIdx + 1]).toLowerCase() === 'copy') {
     const text = String(instruction || '').toLowerCase();
-    if (/\bwebm\b/.test(text)) {
+    const remux = /\bremux\b|without\s+re[\s-]?encod|no\s+re[\s-]?encod|\bstream\s*copy\b|just\s+(change|convert)\s+the\s+container|keep\s+the\s+(video\s+)?codecs?\b/i.test(text);
+    if (remux) {
+      const dropped = dropValuedFlags(out, ['-vf', '-filter:v', '-filter_complex']);
+      corrections.push(`Removed ${dropped.join(', ')} (remux requested: stream copy cannot filter)`);
+    } else if (/\bwebm\b/.test(text)) {
       out[cvIdx + 1] = 'libvpx-vp9';
       corrections.push('Replaced `-c:v copy` with `-c:v libvpx-vp9` (filters cannot stream-copy)');
     } else if (/\bgif\b/.test(text)) {
@@ -849,6 +878,134 @@ function fixupRotate(args, instruction) {
   return { args: out, corrections };
 }
 
+// Volume factor from the instruction ("boost volume", "half volume",
+// "150%"): bare louder/quieter need no volume word, vaguer verbs do.
+// Returns null when no volume intent is recognizable. Mute stays on the
+// -an path (the model emits it, conflicts enforces it).
+function parseVolume(instruction) {
+  const instr = String(instruction || '');
+  const pct = /(?:volume\s*)?(\d+(?:\.\d+)?)\s*%/i.exec(instr);
+  if (pct) {
+    const v = Math.round((parseFloat(pct[1]) / 100) * 100) / 100;
+    return v > 0 && v <= 4 ? v : null;
+  }
+  if (/\blouder\b/i.test(instr)) return 1.5;
+  if (/\bquieter\b|\bhalf\s+volume\b/i.test(instr)) return 0.5;
+  const VOL = '(volume|audio|sound)';
+  const up = new RegExp(`\\bboost\\b[\\w\\s]{0,12}${VOL}|${VOL}[\\w\\s]{0,12}\\bup\\b|\\bturn\\s+up\\b[\\w\\s]{0,12}${VOL}|\\bincrease\\b[\\w\\s]{0,12}${VOL}`, 'i');
+  if (up.test(instr)) return 1.5;
+  const down = new RegExp(`${VOL}[\\w\\s]{0,12}\\bdown\\b|\\bturn\\s+down\\b[\\w\\s]{0,12}${VOL}|\\blower\\b[\\w\\s]{0,12}${VOL}`, 'i');
+  if (down.test(instr)) return 0.5;
+  return null;
+}
+
+function fixupVolume(args, instruction) {
+  const corrections = [];
+  if (!Array.isArray(args)) return { args, corrections };
+  const v = parseVolume(instruction);
+  if (v === null) return { args, corrections };
+  const out = [...args];
+  if (out.includes('-an')) return { args: out, corrections };
+  const want = `volume=${v}`;
+  const afIdx = out.findIndex((t) => t === '-af' || t === '-filter:a');
+  if (afIdx !== -1 && typeof out[afIdx + 1] === 'string' && /volume=/.test(out[afIdx + 1])) {
+    const nv = out[afIdx + 1].replace(/volume=[\d.]*/g, want);
+    if (nv !== out[afIdx + 1]) {
+      out[afIdx + 1] = nv;
+      corrections.push(`Volume: normalized audio to ${want}`);
+    }
+  } else {
+    appendAudioFilter(out, want);
+    corrections.push(`Volume: adjusted audio with ${want}`);
+  }
+  return { args: out, corrections };
+}
+
+// GIF output: small looping-friendly defaults (explicit fps wins), and no
+// audio stream ever - gif has none, so audio flags become -an.
+function fixupGif(args, instruction) {
+  const corrections = [];
+  if (!Array.isArray(args)) return { args, corrections };
+  if (!/\bgif\b/i.test(String(instruction || ''))) return { args, corrections };
+  const out = [...args];
+  const vfIdx = out.findIndex((t) => t === '-vf' || t === '-filter:v');
+  const chain = vfIdx !== -1 && typeof out[vfIdx + 1] === 'string' ? out[vfIdx + 1] : '';
+  if (!/fps=/.test(chain)) {
+    appendVideoFilter(out, 'fps=10');
+    corrections.push('GIF: capped at fps=10 (small files, wide support)');
+  }
+  const chainAfter = (() => {
+    const i = out.findIndex((t) => t === '-vf' || t === '-filter:v');
+    return i !== -1 && typeof out[i + 1] === 'string' ? out[i + 1] : '';
+  })();
+  if (!/scale=/.test(chainAfter)) {
+    appendVideoFilter(out, 'scale=480:-1:flags=lanczos');
+    corrections.push('GIF: scaled with scale=480:-1:flags=lanczos');
+  }
+  if (!out.includes('-an')) {
+    const dropped = dropValuedFlags(out, ['-c:a', '-b:a', '-ac', '-ar', '-af', '-filter:a']);
+    insertBeforeOutput(out, '-an');
+    corrections.push(`GIF: ${dropped.length > 0 ? `dropped audio (${dropped.join(', ')}) and ` : ''}muted with -an (gif has no audio stream)`);
+  }
+  return { args: out, corrections };
+}
+
+// Thumbnail / poster frame: a single frame as a still image. Owns seeking
+// only when no trim intent is present (a trim owns -ss/-t then); always owns
+// the frame count, the image container, and the bitrate flags (a still has
+// no bitrate). Time defaults to the middle with a known duration, else 0.
+function parseThumbTime(instruction, duration) {
+  const instr = String(instruction || '');
+  const at = /at\s+(\d+(?::\d+){0,2}(?:\.\d+)?)/i.exec(instr);
+  if (at) {
+    const v = parseTimeVal(at[1]);
+    if (v !== null && v >= 0) return fmtSec(v);
+  }
+  if (duration > 0) return fmtSec(duration / 2);
+  const any = /(\d+(?:\.\d+)?)\s*s(?:ec(?:ond)?s?)?\b/i.exec(instr);
+  if (any) return fmtSec(parseFloat(any[1]));
+  return '0';
+}
+
+function fixupThumbnail(args, instruction, duration) {
+  const corrections = [];
+  if (!Array.isArray(args)) return { args, corrections };
+  const instr = String(instruction || '');
+  if (!/\bthumbnails?\b|\bposter\b|\bcover\s+(image|frame|art)\b|\bextract\s+(a\s+)?frames?\b/i.test(instr)) {
+    return { args, corrections };
+  }
+  const out = [...args];
+  if (parseTrimIntent(instr).kind === 'none') {
+    setTimeFlags(out, parseThumbTime(instr, duration), null);
+    if (dropTimeFlag(out, '-t')) corrections.push('Thumbnail: dropped -t (a still needs no duration window)');
+    corrections.push(`Thumbnail: seeking to ${parseThumbTime(instr, duration)}s`);
+  }
+  const fIdx = out.findIndex((t) => t === '-frames:v');
+  if (fIdx !== -1) {
+    if (String(out[fIdx + 1]) !== '1') {
+      out[fIdx + 1] = '1';
+      corrections.push('Thumbnail: rendering a single frame (-frames:v 1)');
+    }
+  } else {
+    insertBeforeOutput(out, '-frames:v', '1');
+    corrections.push('Thumbnail: rendering a single frame (-frames:v 1)');
+  }
+  const last = out[out.length - 1];
+  if (last && !String(last).startsWith('-')) {
+    const m = /^(.*)\.(mp4|mkv|webm|mov|avi|m4v)$/i.exec(String(last));
+    if (m) {
+      const wantExt = /\bjpe?g\b/i.test(instr) ? '.jpg' : '.png';
+      out[out.length - 1] = m[1] + wantExt;
+      corrections.push(`Thumbnail: single frame uses ${wantExt} (was .${m[2].toLowerCase()})`);
+    }
+  }
+  const droppedRates = dropValuedFlags(out, ['-b:v', '-maxrate', '-bufsize']);
+  if (droppedRates.length > 0) {
+    corrections.push(`Thumbnail: dropped bitrate flags (${droppedRates.join(', ')}) - a still has no bitrate`);
+  }
+  return { args: out, corrections };
+}
+
 // Prompt-injection builders: exact numbers pre-computed deterministically so
 // the model only has to apply them verbatim (was inline in main.js).
 function buildSizeLine(instruction, duration) {
@@ -889,7 +1046,8 @@ function buildSpeedLine(instruction) {
 // Fixed translation order in one place (was chained by hand in main.js and
 // re-implemented by the smoke-test pipe helper): token fixes, filter
 // construction (so fixupConflicts below sees every filter), input,
-// conflicts, output placeholder, trims, size cap.
+// conflicts, output placeholder, trims, size cap, thumbnail last (it owns
+// the frame count, container, and bitrate flags of a still).
 function runTranslationPipeline(tokens, context) {
   const { instruction, inputFile, duration } = context || {};
   const steps = [
@@ -898,6 +1056,8 @@ function runTranslationPipeline(tokens, context) {
     (a) => fixupFps(a, instruction),
     (a) => fixupWidthScale(a, instruction),
     (a) => fixupRotate(a, instruction),
+    (a) => fixupVolume(a, instruction),
+    (a) => fixupGif(a, instruction),
     (a) => fixupInput(a, inputFile),
     (a) => fixupConflicts(a, instruction),
     (a) => ensureOutputFile(a, instruction),
@@ -906,6 +1066,7 @@ function runTranslationPipeline(tokens, context) {
     (a) => fixupFirstTrim(a, instruction, duration),
     (a) => fixupRangeTrim(a, instruction),
     (a) => fixupSizeLimit(a, instruction, duration),
+    (a) => fixupThumbnail(a, instruction, duration),
   ];
   const corrections = [];
   let args = Array.isArray(tokens) ? [...tokens] : tokens;
@@ -950,10 +1111,15 @@ module.exports = {
   fixupFps,
   fixupWidthScale,
   fixupRotate,
+  fixupVolume,
+  fixupGif,
+  fixupThumbnail,
   parseSpeedFactor,
   parseFps,
   parseWidth,
   parseRotate,
+  parseVolume,
+  parseThumbTime,
   atempoChain,
   fixupConflicts,
   buildSizeLine,

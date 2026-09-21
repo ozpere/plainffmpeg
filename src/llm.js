@@ -42,6 +42,12 @@ const SYSTEM_PROMPT = [
   '- "30fps / cap at 24 fps": `fps=N`.',
   '- "... N wide" (target width, aspect kept): `scale=N:-2` with even N.',
   '- "rotate 90 (clockwise)" → `transpose=1`; "rotate 270" (or 90 CCW) → `transpose=2`; "rotate 180" → `transpose=2,transpose=2`; "flip horizontal/vertical" → `hflip`/`vflip`.',
+  '',
+  'VOLUME, STILLS, AND REMUX:',
+  '- "louder / boost volume / half volume / 150%": `-af volume=1.5` (percent/100; half → `volume=0.5`).',
+  '- "as gif / to gif": `-vf "fps=10,scale=480:-1:flags=lanczos"`, `-an`, output `.gif`.',
+  '- "thumbnail at Ns / poster frame": `-ss N -frames:v 1`, output `.png`.',
+  '- "without re-encoding / remux / stream copy": `-c copy` (or `-c:v copy -c:a copy`) with NO video filters.',
   '- "trim/cut/remove/delete the LAST N seconds" (cut the tail off, keep the head): `-t (duration - N)`.',
   '- "keep/extract only the LAST N seconds" (keep the tail): `-ss (duration - N)` with NO `-t`.',
   '- "keep/extract the MIDDLE N seconds" (center cut): `-ss (duration - N)/2 -t N`.',
@@ -79,6 +85,7 @@ const SYSTEM_PROMPT = [
   '- "Keep the middle 5 seconds of /tmp/in.mp4 (duration 60s), mute it" → -i /tmp/in.mp4 -ss 27.5 -t 5 -an /tmp/in-out.mp4',
   '- "Keep seconds 10 to 20 of /tmp/in.mp4" → -i /tmp/in.mp4 -ss 10 -t 10 /tmp/in-out.mp4',
   '- "Speed up /tmp/in.mp4 2x" → -i /tmp/in.mp4 -vf setpts=0.5*PTS -af atempo=2 /tmp/in-out.mp4',
+  '- "Convert /tmp/in.mp4 to gif" → -i /tmp/in.mp4 -vf "fps=10,scale=480:-1:flags=lanczos" -an /tmp/in-out.gif',
 ].join('\n');
 
 let llamaInitPromise = null;

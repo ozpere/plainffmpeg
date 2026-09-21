@@ -201,6 +201,34 @@ const TRANSLATE_CASES = [
     modelRaw: '-i input.mp4 -c:v libx264 clip-out.mp4',
     expectedArgs: ['-i', '/v/clip.mp4', '-c:v', 'libx264', '-vf', 'transpose=1', 'clip-out.mp4'],
   },
+  {
+    name: 'volume boosted',
+    instruction: 'Boost the volume',
+    duration: 30,
+    modelRaw: '-i input.mp4 -c:v libx264 -c:a aac clip-out.mp4',
+    expectedArgs: ['-i', '/v/clip.mp4', '-c:v', 'libx264', '-c:a', 'aac', '-af', 'volume=1.5', 'clip-out.mp4'],
+  },
+  {
+    name: 'gif audio stripped to -an',
+    instruction: 'Convert to gif',
+    duration: 30,
+    modelRaw: '-i input.mp4 -vf fps=10,scale=480:-1:flags=lanczos -c:a aac clip-out.gif',
+    expectedArgs: ['-i', '/v/clip.mp4', '-vf', 'fps=10,scale=480:-1:flags=lanczos', '-an', 'clip-out.gif'],
+  },
+  {
+    name: 'thumbnail still image',
+    instruction: 'Thumbnail at 10 seconds',
+    duration: 60,
+    modelRaw: '-i input.mp4 -c:v libx264 clip-out.mp4',
+    expectedArgs: ['-i', '/v/clip.mp4', '-c:v', 'libx264', '-ss', '10', '-frames:v', '1', 'clip-out.png'],
+  },
+  {
+    name: 'remux drops filters, keeps copy',
+    instruction: 'Convert mkv to mp4 without re-encoding',
+    duration: 30,
+    modelRaw: '-i input.mp4 -vf scale=-2:720 -c:v copy -c:a copy clip-out.mp4',
+    expectedArgs: ['-i', '/v/clip.mp4', '-c:v', 'copy', '-c:a', 'copy', 'clip-out.mp4'],
+  },
 ];
 
 module.exports = { TRANSLATE_CASES };

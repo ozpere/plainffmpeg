@@ -119,6 +119,9 @@ models/                GGUF weights live here (gitignored, never committed)
 - Speed ("2x faster", "slow motion") keeps audio in sync (`setpts` +
   matched `atempo`); "N wide" scales to that width keeping aspect;
   "rotate 90" / "flip horizontal" apply the matching video filter.
+- Volume ("boost", "half", "150%") tunes `-af volume`; "as gif" enforces
+  small-file GIF defaults with no audio; "thumbnail at Ns" renders one
+  `.png` still; "without re-encoding" remuxes with stream copy.
 - Size limits ("below 2GB") are enforced with single-pass capped
   bitrate computed from the probed duration - two-pass is never used.
 - Output extensions always follow the translated container, and the app
