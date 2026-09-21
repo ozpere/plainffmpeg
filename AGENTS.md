@@ -108,5 +108,8 @@ Order is fixed in `runTranslationPipeline`:
 
 ## Adding a fixup
 
-- Pure function `(args, context) => { args, corrections }`. Never throw, never silently drop flags. Push a human-readable string per rewrite (surfaced in logs).
-- Add cases to `scripts/smoke-test.js` alongside the change. Follow existing `assert.deepStrictEqual` patterns for args and `corrections.length`.
+- Pure function `(args, instruction, ...) => { args, corrections }`. Never throw, never silently drop flags. Push a human-readable string per rewrite (surfaced in logs).
+- Philosophy is aggressive normalization: any recognizable intent is rewritten to exactly the right flags (logged), ambiguous output is left alone.
+- Trim intents go through `parseTrimIntent` (mutually exclusive by construction) and duration-gated kinds through `trimNeedsDuration`; the renderer gate duplicates that list, so update the parity assert too.
+- Filter layers run before `fixupConflicts` in `runTranslationPipeline` (so copy+filter is caught); output-affecting layers run after `ensureOutputFile`.
+- Add an end-to-end case to `scripts/translate-cases.js` (raw model output -> final args) plus unit asserts in `scripts/smoke-test.js` alongside the change. Follow existing `assert.deepStrictEqual` patterns for args and `corrections.length`.
