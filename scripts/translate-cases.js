@@ -258,6 +258,27 @@ const TRANSLATE_CASES = [
     modelRaw: '-i input.mp4 -vf scale=-2:720 -c:v copy -c:a copy clip-out.mp4',
     expectedArgs: ['-i', '/v/clip.mp4', '-c:v', 'copy', '-c:a', 'copy', 'clip-out.mp4'],
   },
+  {
+    name: 'trim plus thumbnail defers seeking',
+    instruction: 'keep the middle 5 seconds, thumbnail at 2 seconds',
+    duration: 60,
+    modelRaw: '-i input.mp4 -ss 27.5 -t 5 clip-out.mp4',
+    expectedArgs: ['-i', '/v/clip.mp4', '-ss', '27.5', '-t', '5', '-frames:v', '1', 'clip-out.png'],
+  },
+  {
+    name: 'explicit speed overrules model setpts',
+    instruction: 'Speed up 2x',
+    duration: 30,
+    modelRaw: '-i input.mp4 -vf setpts=2*PTS -af atempo=0.5 clip-out.mp4',
+    expectedArgs: ['-i', '/v/clip.mp4', '-vf', 'setpts=0.5*PTS', '-af', 'atempo=2', 'clip-out.mp4'],
+  },
+  {
+    name: 'range between form',
+    instruction: 'keep between 10 and 20 seconds',
+    duration: 60,
+    modelRaw: '-i input.mp4 clip-out.mp4',
+    expectedArgs: ['-i', '/v/clip.mp4', '-ss', '10', '-t', '10', 'clip-out.mp4'],
+  },
 ];
 
 module.exports = { TRANSLATE_CASES };

@@ -339,6 +339,31 @@ async function main() {
   assert.strictEqual(mainMod.parseRotate('convert to mp4'), null);
   let rt = mainMod.fixupRotate(['-i', 'in.mp4', '-vf', 'scale=-2:720', 'out.mp4'], 'rotate 90 degrees');
   assert.deepStrictEqual(rt.args, ['-i', 'in.mp4', '-vf', 'scale=-2:720,transpose=1', 'out.mp4']);
+  // mismatched transpose is replaced, never stacked (stacking cancels out)
+  rt = mainMod.fixupRotate(['-i', 'in.mp4', '-vf', 'transpose=2', 'out.mp4'], 'rotate 90 degrees clockwise');
+  assert.deepStrictEqual(rt.args, ['-i', 'in.mp4', '-vf', 'transpose=1', 'out.mp4']);
+  rt = mainMod.fixupRotate(['-i', 'in.mp4', '-vf', 'transpose=2,transpose=2', 'out.mp4'], 'rotate 180');
+  assert.deepStrictEqual(rt.args, ['-i', 'in.mp4', '-vf', 'transpose=2,transpose=2', 'out.mp4']);
+  assert.strictEqual(rt.corrections.length, 0, 'correct rotation untouched');
+  assert.strictEqual(mainMod.parseRotate('rotate clockwise'), 'transpose=1');
+  assert.strictEqual(mainMod.parseRotate('rotate counterclockwise'), 'transpose=2');
+  // atempo rebuild keeps neighboring audio filters, drops stale atempo parts
+  sp = mainMod.fixupSpeed(['-i', 'in.mp4', '-af', 'volume=1.5,atempo=0.5', 'out.mp4'], 'Speed up 2x');
+  assert.deepStrictEqual(sp.args, ['-i', 'in.mp4', '-af', 'volume=1.5,atempo=2', '-vf', 'setpts=0.5*PTS', 'out.mp4']);
+  // first-remove rewrites a wrong -ss instead of only inserting
+  ft = mainMod.fixupFirstTrim(['-i', 'in.mp4', '-ss', '9', 'out.mp4'], 'remove the first 5 seconds', 30);
+  assert.deepStrictEqual(ft.args, ['-i', 'in.mp4', '-ss', '5', 'out.mp4']);
+  // between/and range form parses
+  assert.deepStrictEqual(mainMod.parseTrimIntent('keep between 10 and 20 seconds'), { kind: 'range', a: 10, b: 20, rawA: '10', rawB: '20' });
+  // volume verbs beyond boost
+  assert.strictEqual(mainMod.parseVolume('turn down the volume'), 0.5);
+  assert.strictEqual(mainMod.parseVolume('increase the audio'), 1.5);
+  // absurd and no-op factors stay out of the pipeline
+  assert.strictEqual(mainMod.parseSpeedFactor('play at 32x speed'), null, 'absurd factors are not intents');
+  assert.strictEqual(mainMod.buildSpeedLine('play at 1x speed'), '', '1x needs no filters');
+  sp = mainMod.fixupSpeed(['-i', 'in.mp4', '-vf', 'setpts=0.5*PTS', 'out.mp4'], 'play at 1x speed');
+  assert.deepStrictEqual(sp.args, ['-i', 'in.mp4', '-vf', 'setpts=0.5*PTS', 'out.mp4']);
+  assert.strictEqual(sp.corrections.length, 0, 'explicit 1x leaves model output alone');
   assert.ok(mainMod.SYSTEM_PROMPT.includes('setpts=(1/X)*PTS'), 'prompt must teach speed filters');
   // volume: percent, words, existing volume, muted skip
   assert.strictEqual(typeof mainMod.fixupVolume, 'function');

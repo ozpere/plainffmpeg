@@ -769,7 +769,11 @@ function fixupSpeed(args, instruction) {
     const wantAf = atempoChain(x);
     const afIdx = out.findIndex((t) => t === '-af' || t === '-filter:a');
     if (afIdx !== -1 && typeof out[afIdx + 1] === 'string' && /atempo=/.test(out[afIdx + 1])) {
-      const nv = out[afIdx + 1].replace(/atempo=[^,]*(,atempo=[^,]*)*/g, wantAf);
+      // Rebuild the chain around the wanted atempo: replacing textually
+      // would duplicate it when other filters sit between atempo parts.
+      const kept = out[afIdx + 1].split(',').filter((p) => !/^atempo=/.test(p.trim()));
+      kept.push(wantAf);
+      const nv = kept.join(',');
       if (nv !== out[afIdx + 1]) {
         out[afIdx + 1] = nv;
         corrections.push(`Speed ${fmtTempo(x)}x: matched audio with ${wantAf} (keeps A/V in sync)`);
@@ -866,8 +870,21 @@ function fixupRotate(args, instruction) {
   if (!filter) return { args, corrections };
   const out = [...args];
   const vfIdx = out.findIndex((t) => t === '-vf' || t === '-filter:v');
-  if (vfIdx !== -1 && typeof out[vfIdx + 1] === 'string' && out[vfIdx + 1].includes(filter)) {
+  const chain = vfIdx !== -1 && typeof out[vfIdx + 1] === 'string' ? out[vfIdx + 1] : '';
+  const isPair = filter === 'transpose=2,transpose=2';
+  const present = isPair ? /transpose=2.*transpose=2/.test(chain) : chain.includes(filter);
+  if (vfIdx !== -1 && typeof out[vfIdx + 1] === 'string' && present) {
     return { args: out, corrections };
+  }
+  if (/transpose=/.test(filter) && /transpose=/.test(chain)) {
+    // Rotation owns the transpose chain: replace, never stack (a stacked
+    // transpose=2,transpose=1 cancels out to no rotation at all).
+    const nv = chain.replace(/transpose=[12](,transpose=[12])*/g, filter);
+    if (nv !== chain) {
+      out[vfIdx + 1] = nv;
+      corrections.push(`Rotation: normalized to ${filter} (stacked transposes would overshoot)`);
+      return { args: out, corrections };
+    }
   }
   appendVideoFilter(out, filter);
   corrections.push(`Rotation: applied ${filter}`);
