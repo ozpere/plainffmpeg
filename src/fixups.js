@@ -64,7 +64,7 @@ function ensureOutputFile(args, instruction) {
     '-i', '-ss', '-t', '-s', '-video_size', '-vf', '-filter:v', '-filter:a',
     '-filter_complex', '-c', '-c:v', '-c:a', '-b:v', '-b:a', '-maxrate',
     '-bufsize', '-ac', '-ar', '-r', '-pix_fmt', '-crf', '-preset', '-tune',
-    '-movflags', '-map', '-pass', '-passlogfile', '-f',
+    '-movflags', '-map', '-pass', '-passlogfile', '-f', '-frames:v',
   ]);
   const dropped = [];
   while (out.length > 0 && valuedFlags.has(out[out.length - 1])) {

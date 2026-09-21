@@ -375,6 +375,10 @@ async function main() {
   assert.deepStrictEqual(th.args, ['-i', 'in.mp4', '-ss', '10', '-frames:v', '1', 'out.png']);
   th = mainMod.fixupThumbnail(['-i', 'in.mp4', 'out.mp4'], 'convert to mp4', 60);
   assert.deepStrictEqual(th.args, ['-i', 'in.mp4', 'out.mp4'], 'non-thumbnail untouched');
+  // truncated answer ending on -frames:v: the appended still is not its value
+  const dangling = mainMod.ensureOutputFile(['-i', '/v/clip.mp4', '-c:v', 'libx264', '-frames:v'], 'thumbnail as png');
+  assert.deepStrictEqual(dangling.args, ['-i', '/v/clip.mp4', '-c:v', 'libx264', 'output.png']);
+  assert.strictEqual(dangling.corrections.length, 2, 'dangling flag drop plus output append are both reported');
   // remux intent drops filters instead of replacing the codec
   const rx = mainMod.fixupConflicts(['-i', 'in.mp4', '-vf', 'scale=-2:720', '-c:v', 'copy', '-c:a', 'copy', 'out.mp4'],
     'convert mkv to mp4 without re-encoding');
@@ -1205,7 +1209,7 @@ async function main() {
   const bannedDash = String.fromCharCode(0x2014);
   for (const f of ['src/main.js', 'src/fixups.js', 'src/paths.js', 'src/llm.js', 'src/preload.js', 'src/renderer/index.html',
     'src/renderer/renderer.js', 'src/renderer/styles.css', 'package.json',
-    'scripts/download-model.js', 'scripts/fetch-vc-redist.js', 'scripts/install-windows.js',
+    'scripts/download-model.js', 'scripts/fetch-vc-redist.js', 'scripts/install-windows.js', 'scripts/translate-cases.js',
     'assets/vc-redist.nsh', '.github/workflows/release.yml']) {
     const content = fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
     assert.ok(!content.includes(bannedDash), `${f} must not contain em-dashes`);
@@ -1242,6 +1246,16 @@ async function main() {
   assert.ok(mainMod.SYSTEM_PROMPT.includes('EXAMPLES'), 'prompt must carry few-shot examples');
   assert.ok(mainMod.SYSTEM_PROMPT.includes('Never invent'), 'prompt must forbid inventing paths');
   assert.ok(mainMod.SYSTEM_PROMPT.includes('non-thinking mode'), 'prompt must disable Qwen3 thinking traces');
+  // trim arithmetic belongs to the trimming section, stated once (a 1.7B
+  // model obeys coherent sections better than scattered rules).
+  const timeSection = llmSrc.indexOf('TIME AND TRIMMING');
+  const speedSection = llmSrc.indexOf('SPEED, RATE');
+  assert.ok(timeSection !== -1 && speedSection !== -1 && timeSection < speedSection, 'prompt sections must exist in order');
+  for (const rule of ['(duration - N)', '(duration - N)/2']) {
+    const at = llmSrc.indexOf(rule);
+    assert.ok(at > timeSection && at < speedSection, `trim rule must live in the trimming section: ${rule}`);
+  }
+  assert.strictEqual(llmSrc.split('from second A').length - 1, 1, 'range rule must be stated once');
   console.log('[smoke] system prompt OK');
 
   // button order: Translate only | Translate & Run FFmpeg | Run FFmpeg
