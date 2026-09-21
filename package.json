@@ -13,7 +13,7 @@
     "dist:win": "npm run fetch-vc-redist && electron-builder --win nsis portable --publish never",
     "dist:linux": "electron-builder --linux AppImage --publish never",
     "postinstall": "node scripts/download-model.js --check-only || node scripts/download-model.js --best-effort",
-    "test": "node --check src/main.js && node --check src/fixups.js && node --check src/paths.js && node --check src/llm.js && node --check src/preload.js && node --check src/renderer/renderer.js && node --check scripts/download-model.js && node --check scripts/fetch-vc-redist.js && node --check scripts/install-windows.js && node --check scripts/smoke-test.js && echo \"syntax OK\"",
+    "test": "node --check src/main.js && node --check src/fixups.js && node --check src/paths.js && node --check src/llm.js && node --check src/preload.js && node --check src/renderer/renderer.js && node --check scripts/download-model.js && node --check scripts/fetch-vc-redist.js && node --check scripts/install-windows.js && node --check scripts/smoke-test.js && node --check scripts/translate-cases.js && echo \"syntax OK\"",
     "test:headless": "node scripts/smoke-test.js"
   },
   "dependencies": {

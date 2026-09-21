@@ -18,6 +18,7 @@ const required = [
   'src/renderer/styles.css',
   'scripts/download-model.js',
   'scripts/fetch-vc-redist.js',
+  'scripts/translate-cases.js',
   'assets/logo.png',
   'assets/icon.ico',
   'assets/icon.icns',
@@ -305,6 +306,19 @@ async function main() {
   sz = mainMod.fixupSizeLimit(['-i', 'in.mp4', 'out.mp4'], 'below 50MB', null);
   assert.deepStrictEqual(sz.args, ['-i', 'in.mp4', 'out.mp4']);
   console.log('[smoke] fixupSizeLimit OK');
+
+  // regression corpus: raw model output -> final args through the real order.
+  // New user-reported failures land in scripts/translate-cases.js first.
+  const { TRANSLATE_CASES } = require('./translate-cases.js');
+  for (const c of TRANSLATE_CASES) {
+    const cleaned = mainMod.sanitizeModelOutput(c.modelRaw);
+    const tokens = mainMod.tokenizeArgs(cleaned, c.inputFile || '/v/clip.mp4');
+    const composed = mainMod.runTranslationPipeline(tokens, {
+      instruction: c.instruction, inputFile: c.inputFile || '/v/clip.mp4', duration: c.duration,
+    });
+    assert.deepStrictEqual(composed.args, c.expectedArgs, `corpus case failed: ${c.name}`);
+  }
+  console.log(`[smoke] translate corpus OK (${TRANSLATE_CASES.length} cases)`);
 
   // probeMedia against a real generated clip (fast, local, no model)
   try {

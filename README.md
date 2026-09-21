@@ -98,6 +98,7 @@ scripts/
   fetch-vc-redist.js   MSVC redist fetcher (build-time only, not committed)
   install-windows.js   Windows install helper (CPU-only, long paths, MSVC check)
   smoke-test.js        Headless verification suite
+  translate-cases.js   Regression corpus (raw model output → final args)
 assets/                Logo, platform icons, branded installer art, NSIS hooks
 models/                GGUF weights live here (gitignored, never committed)
 ```

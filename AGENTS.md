@@ -45,6 +45,7 @@ assets/installerSidebar.bmp + installerHeader.bmp  Branded NSIS art (164x314 sid
 .github/workflows/release.yml Windows CI (least-privilege, npm-cached): install, checks, dist:win, dist:linux, upload exes
 scripts/install-windows.js CPU-only install helper
 scripts/smoke-test.js    Headless contract, asserts behavior not just syntax
+scripts/translate-cases.js Regression corpus: raw model output -> final args through the real pipeline order (new failures land here first)
 models/                  Weights only (gitignored). Keep models/.gitkeep.
 ```
 
