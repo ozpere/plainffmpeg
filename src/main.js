@@ -15,11 +15,13 @@ const {
   fixupArgs,
   fixupInput,
   fixupLastTrim,
+  fixupMiddleTrim,
   fixupSizeLimit,
   fixupConflicts,
   ensureOutputFile,
   parseSizeLimit,
   parseHMS,
+  fmtSec,
   quoteArgs,
   ffmpegFailureHint,
 } = require('./fixups');
@@ -329,6 +331,10 @@ function handleModelStatus() {
     ready,
     portable: isPortableLaunch(),
     fallbackToAppData: portableFallbackActive(),
+    // Null outside portable runs. False means the exe folder cannot take the
+    // 1.3 GB model, so app data is the only home; true means the exe folder
+    // is writable and an app-data model is simply being reused as-is.
+    portableWritable: isPortableLaunch() ? portableDataDir() !== null : null,
   };
 }
 
@@ -347,9 +353,22 @@ async function handleTranslatePrompt({ instruction, inputFile, duration }) {
       `Encode video at about ${vk}k: use exactly -b:v ${vk}k -maxrate ${vk}k -bufsize ${vk * 2}k, ` +
       `audio -c:a aac -b:a 128k, single pass only.\n`;
   }
-  const userPrompt = `Input file: ${inputFile || 'input.mp4'}\n${durLine}${sizeLine}Task: ${instruction || ''}\nFFmpeg args:\n/no_think`;
+  // Center-cut math, done deterministically so the model only has to apply
+  // it (same pattern as the size limit): exact -ss/-t numbers for
+  // "keep the middle N seconds" of a D-second video.
+  let middleLine = '';
+  const middleM = /middle\s+(\d+(?:\.\d+)?)\s*s(?:ec(?:ond)?s?)?/i.exec(String(instruction || ''));
+  if (middleM && duration > 0) {
+    const middleN = parseFloat(middleM[1]);
+    if (middleN > 0 && middleN < duration) {
+      middleLine = `Center cut: keep the middle ${middleM[1]}s of this ${duration}s video. ` +
+        `Use exactly -ss ${fmtSec((duration - middleN) / 2)} -t ${fmtSec(middleN)}, placed after -i.\n`;
+    }
+  }
+  const userPrompt = `Input file: ${inputFile || 'input.mp4'}\n${durLine}${sizeLine}${middleLine}Task: ${instruction || ''}\nFFmpeg args:\n/no_think`;
   // No silent fallback: any LLM problem is returned as an error so the UI
   // can alert the user instead of running a guessed-up command.
+  let rawOut = '';
   try {
     if (isLlamaLoading()) {
       notifyRenderer('LLM is still loading in the background - holding your translation until it is ready…');
@@ -359,6 +378,7 @@ async function handleTranslatePrompt({ instruction, inputFile, duration }) {
       maxTokens: 256,
       temperature: 0.1,
     });
+    rawOut = String(raw || '');
     const cleaned = sanitizeModelOutput(raw);
     if (!cleaned) throw new Error('LLM returned empty output.');
     const tokens = tokenizeArgs(cleaned, inputFile);
@@ -369,11 +389,12 @@ async function handleTranslatePrompt({ instruction, inputFile, duration }) {
     // trailing output token, which keeps flag/value pairs adjacent.
     const withOutput = ensureOutputFile(withConflicts.args, instruction);
     const withTrim = fixupLastTrim(withOutput.args, instruction, duration);
-    const withSize = fixupSizeLimit(withTrim.args, instruction, duration);
+    const withMiddle = fixupMiddleTrim(withTrim.args, instruction, duration);
+    const withSize = fixupSizeLimit(withMiddle.args, instruction, duration);
     const args = withSize.args;
     const corrections = fixed.corrections.concat(
       withInput.corrections, withConflicts.corrections, withOutput.corrections, withTrim.corrections,
-      withSize.corrections
+      withMiddle.corrections, withSize.corrections
     );
     return {
       ok: true,
@@ -399,6 +420,7 @@ async function handleTranslatePrompt({ instruction, inputFile, duration }) {
         ok: false,
         engine: 'node-llama-cpp',
         error: message,
+        raw: rawOut || undefined,
         diag,
         errorKind: 'msvc-missing',
         hint,
@@ -408,6 +430,7 @@ async function handleTranslatePrompt({ instruction, inputFile, duration }) {
       ok: false,
       engine: 'node-llama-cpp',
       error: message,
+      raw: rawOut || undefined,
       diag,
       errorKind: 'load-failed',
     };
@@ -643,6 +666,7 @@ module.exports = {
   fixupArgs,
   fixupInput,
   fixupLastTrim,
+  fixupMiddleTrim,
   fixupSizeLimit,
   fixupConflicts,
   ensureOutputFile,

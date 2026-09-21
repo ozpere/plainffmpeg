@@ -61,6 +61,11 @@
       "perMachine": false,
       "allowToChangeInstallationDirectory": true,
       "artifactName": "PlainFFmpeg-Setup-${version}.exe",
+      "installerIcon": "assets/icon.ico",
+      "uninstallerIcon": "assets/icon.ico",
+      "installerSidebar": "assets/installerSidebar.bmp",
+      "uninstallerSidebar": "assets/installerSidebar.bmp",
+      "installerHeader": "assets/installerHeader.bmp",
       "include": "assets/vc-redist.nsh"
     },
     "portable": {

@@ -416,6 +416,43 @@ function fixupLastTrim(args, instruction, durationSec) {
   return { args: out, corrections };
 }
 
+// "middle N seconds" needs the input duration to resolve: keep the center
+// cut [S, S+N] where S = (D-N)/2, via `-ss S -t N`. Rewrites only the
+// clear-cut wrong shape and leaves sane commands alone.
+function fixupMiddleTrim(args, instruction, durationSec) {
+  const corrections = [];
+  if (!durationSec || !(durationSec > 0) || !Array.isArray(args)) return { args, corrections };
+  const m = /middle\s+(\d+(?:\.\d+)?)\s*s(?:ec(?:ond)?s?)?/i.exec(String(instruction || ''));
+  if (!m) return { args, corrections };
+  const N = parseFloat(m[1]);
+  if (!(N > 0) || N >= durationSec) return { args, corrections };
+  const wantSs = fmtSec((durationSec - N) / 2);
+  const wantT = fmtSec(N);
+  const approx = (a, b) => a !== null && b !== null && Math.abs(a - b) < 0.51;
+
+  const out = [...args];
+  const ssIdx = out.findIndex((t) => t === '-ss');
+  const tIdx = out.findIndex((t) => t === '-t');
+  const ssVal = ssIdx !== -1 ? parseTimeVal(out[ssIdx + 1]) : null;
+  const tVal = tIdx !== -1 ? parseTimeVal(out[tIdx + 1]) : null;
+  if (ssIdx !== -1 && tIdx !== -1
+      && approx(ssVal, (durationSec - N) / 2) && approx(tVal, N)) {
+    return { args: out, corrections };
+  }
+  if (ssIdx !== -1) out[ssIdx + 1] = wantSs;
+  else {
+    const at = out.length > 0 && !String(out[out.length - 1]).startsWith('-') ? out.length - 1 : out.length;
+    out.splice(at, 0, '-ss', wantSs);
+  }
+  const ttIdx = out.findIndex((t) => t === '-t');
+  if (ttIdx !== -1) out[ttIdx + 1] = wantT;
+  else {
+    const at = out.length > 0 && !String(out[out.length - 1]).startsWith('-') ? out.length - 1 : out.length;
+    out.splice(at, 0, '-t', wantT);
+  }
+  corrections.push(`"middle ${m[1]}s" of ${fmtSec(durationSec)}s - keeping [${wantSs}s, ${fmtSec((durationSec - N) / 2 + N)}s]`);
+  return { args: out, corrections };
+}
 // Contradictions ffmpeg rejects outright (or that violate runner contracts):
 // two-pass flags (single-shot runner), audio-codec flags combined with -an,
 // and `-c:v copy` paired with video filters (filtering requires re-encoding).
@@ -489,5 +526,6 @@ module.exports = {
   parseBitrateBps,
   fixupSizeLimit,
   fixupLastTrim,
+  fixupMiddleTrim,
   fixupConflicts,
 };

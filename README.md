@@ -54,10 +54,14 @@ npm run dist:win
 Builds a per-user NSIS installer and a portable exe in `dist/`. The
 installer is thin (no ~1.3 GB model bundled) and sets up the MSVC runtime
 silently - declining its admin prompt still installs the app, but
-translation needs that runtime. The portable keeps everything (model,
-profile, imports) in `PlainFFmpegData` next to the exe, so deleting the
-folder leaves nothing behind. If the exe folder is not writable, the
-portable asks before using Windows app data instead. First launch
+translation needs that runtime. The installer is branded with the app icon
+and the warm-charcoal sidebar/header art (full NSIS color theming is not
+possible, so pages keep the native layout). The portable keeps everything
+(model, profile, imports) in `PlainFFmpegData` next to the exe, so deleting
+the folder leaves nothing behind. If the exe folder is not writable, the
+portable asks before using Windows app data instead; if it simply finds an
+existing model in app data (from an install or an earlier run), it reuses it
+and says so without claiming the folder is unwritable. First launch
 downloads the model in-app (resumable, with progress), then works fully
 offline. Releases are built by CI on demand or `v*` tags; unsigned builds
 trigger SmartScreen until code-signed.
@@ -94,7 +98,7 @@ scripts/
   fetch-vc-redist.js   MSVC redist fetcher (build-time only, not committed)
   install-windows.js   Windows install helper (CPU-only, long paths, MSVC check)
   smoke-test.js        Headless verification suite
-assets/                Logo, platform icons, NSIS hooks
+assets/                Logo, platform icons, branded installer art, NSIS hooks
 models/                GGUF weights live here (gitignored, never committed)
 ```
 
@@ -103,8 +107,12 @@ models/                GGUF weights live here (gitignored, never committed)
 - The engine badge polls the LLM state: unavailable → loading → ready
   (or failed, with the cause in the logs). A translation requested
   mid-load simply waits for it.
+- Translation and FFmpeg step statuses are color- and icon-coded (Idle,
+  Translating.../Running..., Done, Failed, Cancelled), so outcomes read at
+  a glance.
 - "Trim the last N seconds" means *cutting* those seconds off
-  (`-t duration-N`); "keep the last N" keeps the tail.
+  (`-t duration-N`); "keep the last N" keeps the tail; "keep the middle N"
+  keeps the center cut (`-ss (duration-N)/2 -t N`).
 - Size limits ("below 2GB") are enforced with single-pass capped
   bitrate computed from the probed duration - two-pass is never used.
 - Output extensions always follow the translated container, and the app

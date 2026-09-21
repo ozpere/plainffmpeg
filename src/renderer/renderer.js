@@ -178,6 +178,17 @@
     engineBadge.classList.toggle('error', state === 'error');
   }
 
+  // Step statuses carry color + icon through classes so the copy itself
+  // stays exactly 'Idle' / 'Translating…' / 'Running…' / 'Done' / 'Failed'
+  // / 'Cancelled' (plus 'N%' / 'Failed (code N)' live progress). Icons come
+  // from CSS ::before so screen readers hear only the words.
+  const STATUS_CLASSES = ['st-idle', 'st-active', 'st-done', 'st-failed', 'st-cancelled'];
+  function setStatus(el, state, text) {
+    el.textContent = text;
+    for (const c of STATUS_CLASSES) el.classList.remove(c);
+    if (state) el.classList.add(state);
+  }
+
   // Progress bars: width and the matching ARIA value move together so both
   // stay truthful. null means indeterminate (pulsing, no percentage).
   function paintBar(bar, pct) {
@@ -286,8 +297,8 @@
     engineNote.textContent = '';
     cmdOut.textContent = '-';
     runBtn.disabled = true;
-    translateStatus.textContent = 'Idle';
-    ffmpegStatus.textContent = 'Idle';
+    setStatus(translateStatus, 'st-idle', 'Idle');
+    setStatus(ffmpegStatus, 'st-idle', 'Idle');
     paintBar(barTranslate, 0);
     paintBar(barFfmpeg, 0);
     if (!p) {
@@ -357,10 +368,19 @@
         statusLogged = true;
         log(`AI model path: ${s.modelPath || '(unknown)'}${s.exists ? '' : ' (not downloaded yet)'}`);
       }
-      // Standing notice while a portable run stores data outside its folder.
+      // Standing notice while a portable run uses a model outside its folder.
+      // Two cases: the exe folder is not writable (app data is the only
+      // home), or the exe folder is writable but the model was already found
+      // in app data (installed copy, earlier unwritable run) and is reused
+      // as-is. Only the first case may claim the folder is not writable.
       if (portableNote) {
         if (s.portable && s.fallbackToAppData) {
-          portableNote.textContent = 'Portable note: the exe folder is not writable, so the AI model lives in Windows app data and survives deleting this folder. Path is logged below.';
+          if (s.portableWritable === false) {
+            portableNote.textContent = 'Portable note: the exe folder is not writable, so the AI model lives in Windows app data and survives deleting this folder. Path is logged below.';
+          } else {
+            portableNote.textContent = 'Portable note: using the AI model found in Windows app data. It stays there until you re-download next to the exe. Path is logged below.';
+          }
+          portableNote.classList.toggle('warn', s.portableWritable === false);
           portableNote.hidden = false;
         } else {
           portableNote.hidden = true;
@@ -421,7 +441,7 @@
     }
     // Time and size requests are resolved against the probed duration - with
     // no duration the fixups skip silently and the command would be wrong.
-    if (/last\s+\d|below|under|\bmb\b|\bgb\b|size/i.test(text) && !(mediaDuration > 0)) {
+    if (/last\s+\d|middle\s+\d|below|under|\bmb\b|\bgb\b|size/i.test(text) && !(mediaDuration > 0)) {
       if (probing) showBanner('Still reading the video file - wait a moment, then press Translate again.');
       else showBanner('The video duration is unknown, so time and size requests cannot be applied. See logs for details.');
       return null;
@@ -431,7 +451,7 @@
     translateOnlyBtn.disabled = true;
     runBtn.disabled = true;
     paintBar(barTranslate, null);
-    translateStatus.textContent = 'Translating…';
+    setStatus(translateStatus, 'st-active', 'Translating…');
     log(`translating: "${text}" …`);
     try {
       const res = await window.api.translatePrompt({ instruction: text, inputFile, duration: mediaDuration });
@@ -441,7 +461,7 @@
         runBtn.disabled = true;
         cmdOut.textContent = '-';
         paintBar(barTranslate, 0);
-        translateStatus.textContent = 'Failed';
+        setStatus(translateStatus, 'st-failed', 'Failed');
         if (res && res.raw) log('raw LLM output (truncated): ' + String(res.raw).slice(0, 800));
         if (res && res.hint) log(res.hint);
         if (res && res.diag) log('LLM diagnostics: ' + res.diag);
@@ -461,14 +481,14 @@
       refreshOutputDisplay();
       log(`output → ${effectiveOutput() || '(none yet - select an input video)'}`);
       paintBar(barTranslate, 100);
-      translateStatus.textContent = 'Done';
+      setStatus(translateStatus, 'st-done', 'Done');
       runBtn.disabled = !lastArgs;
       return res;
     } catch (e) {
       lastArgs = null;
       runBtn.disabled = true;
       paintBar(barTranslate, 0);
-      translateStatus.textContent = 'Failed';
+      setStatus(translateStatus, 'st-failed', 'Failed');
       showError((e && e.message ? e.message : e) || 'unknown error');
       return null;
     } finally {
@@ -492,7 +512,7 @@
         log(`output already exists: ${out}`);
         const go = await confirmOverwriteUI(out);
         if (!go) {
-          ffmpegStatus.textContent = 'Cancelled';
+          setStatus(ffmpegStatus, 'st-cancelled', 'Cancelled');
           log('run cancelled - existing file kept.');
           return;
         }
@@ -504,15 +524,15 @@
     translateBtn.disabled = true;
     translateOnlyBtn.disabled = true;
     paintBar(barFfmpeg, 0);
-    ffmpegStatus.textContent = 'Running…';
+    setStatus(ffmpegStatus, 'st-active', 'Running…');
     log(`running ffmpeg → ${out}…`);
     try {
       const res = await window.api.runFfmpeg({ args: lastArgs, outputFile: out });
       paintBar(barFfmpeg, 100);
-      ffmpegStatus.textContent = 'Done';
+      setStatus(ffmpegStatus, 'st-done', 'Done');
       log('done → ' + (res && res.output ? res.output : 'ok'));
     } catch (e) {
-      ffmpegStatus.textContent = 'Failed';
+      setStatus(ffmpegStatus, 'st-failed', 'Failed');
       // Failures surface themselves: expand the collapsed-by-default logs.
       terminal.hidden = false;
       toggleLogsBtn.textContent = 'Hide logs';
@@ -827,12 +847,14 @@
     if (p.done) {
       paintBar(barFfmpeg, 100);
       if (ffmpegStatus.textContent === 'Running…') {
-        ffmpegStatus.textContent = p.code === 0 ? 'Done' : (typeof p.code === 'number' ? `Failed (code ${p.code})` : 'Failed');
+        if (p.code === 0) setStatus(ffmpegStatus, 'st-done', 'Done');
+        else if (typeof p.code === 'number') setStatus(ffmpegStatus, 'st-failed', `Failed (code ${p.code})`);
+        else setStatus(ffmpegStatus, 'st-failed', 'Failed');
       }
     } else if (typeof p.pct === 'number') {
       const pct = Math.max(0, Math.min(100, p.pct));
       paintBar(barFfmpeg, pct);
-      ffmpegStatus.textContent = `${Math.floor(pct)}%`;
+      setStatus(ffmpegStatus, 'st-active', `${Math.floor(pct)}%`);
     } else {
       // No duration known: creep forward so the bar still feels alive.
       const cur = parseFloat(barFfmpeg.style.width) || 0;

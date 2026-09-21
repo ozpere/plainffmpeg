@@ -21,6 +21,8 @@ const required = [
   'assets/logo.png',
   'assets/icon.ico',
   'assets/icon.icns',
+  'assets/installerSidebar.bmp',
+  'assets/installerHeader.bmp',
   'assets/vc-redist.nsh',
   '.github/workflows/release.yml',
 ];
@@ -193,6 +195,30 @@ async function main() {
   // unknown duration or no last-N → untouched
   lt = mainMod.fixupLastTrim(['-i', 'in.mp4', '-ss', '0', '-t', '5', 'out.mkv'], 'trim the last 5 seconds', null);
   assert.deepStrictEqual(lt.args, ['-i', 'in.mp4', '-ss', '0', '-t', '5', 'out.mkv']);
+  // "keep the middle N seconds" = center cut [S, S+N], S = (D-N)/2
+  assert.strictEqual(typeof mainMod.fixupMiddleTrim, 'function');
+  assert.strictEqual(fixupsMod.fixupMiddleTrim, mainMod.fixupMiddleTrim, 'fixups must be the same functions main re-exports');
+  let md = mainMod.fixupMiddleTrim(['-i', 'in.mp4', '-an', 'out.mp4'], 'Keep the middle 5 seconds, make it muted', 60);
+  assert.deepStrictEqual(md.args, ['-i', 'in.mp4', '-an', '-ss', '27.5', '-t', '5', 'out.mp4']);
+  assert.strictEqual(md.corrections.length, 1, 'must report the center cut');
+  // wrong -ss/-t for a middle request are corrected, not kept
+  md = mainMod.fixupMiddleTrim(['-i', 'in.mp4', '-ss', '0', '-t', '5', 'out.mp4'], 'keep the middle 5 seconds', 60);
+  assert.deepStrictEqual(md.args, ['-i', 'in.mp4', '-ss', '27.5', '-t', '5', 'out.mp4']);
+  assert.strictEqual(md.corrections.length, 1);
+  // already-correct center cut is untouched
+  md = mainMod.fixupMiddleTrim(['-i', 'in.mp4', '-ss', '27.5', '-t', '5', 'out.mp4'], 'keep the middle 5 seconds', 60);
+  assert.deepStrictEqual(md.args, ['-i', 'in.mp4', '-ss', '27.5', '-t', '5', 'out.mp4']);
+  assert.strictEqual(md.corrections.length, 0, 'sane center cut untouched');
+  // unknown duration, oversized N, or no middle-N → untouched
+  md = mainMod.fixupMiddleTrim(['-i', 'in.mp4', 'out.mp4'], 'keep the middle 5 seconds', null);
+  assert.deepStrictEqual(md.args, ['-i', 'in.mp4', 'out.mp4']);
+  md = mainMod.fixupMiddleTrim(['-i', 'in.mp4', 'out.mp4'], 'keep the middle 5 seconds', 4);
+  assert.deepStrictEqual(md.args, ['-i', 'in.mp4', 'out.mp4']);
+  md = mainMod.fixupMiddleTrim(['-i', 'in.mp4', 'out.mp4'], 'trim the last 5 seconds', 60);
+  assert.deepStrictEqual(md.args, ['-i', 'in.mp4', 'out.mp4']);
+  // the prompt must teach the center cut (functional users of it are below,
+  // where mainSrc/renderer are in scope)
+  assert.ok(mainMod.SYSTEM_PROMPT.includes('(duration - N)/2'), 'prompt must teach middle-N arithmetic');
   // contradictions ffmpeg rejects: two-pass, -an with audio flags, copy with filters
   assert.strictEqual(typeof mainMod.fixupConflicts, 'function');
   let cf = mainMod.fixupConflicts(['-i', 'in.mp4', '-c:v', 'libx264', '-pass', '1', 'out.mp4']);
@@ -216,7 +242,8 @@ async function main() {
     const s3 = mainMod.fixupConflicts(s2.args, instr);
     const s4 = mainMod.ensureOutputFile(s3.args, instr);
     const s5 = mainMod.fixupLastTrim(s4.args, instr, dur);
-    return mainMod.fixupSizeLimit(s5.args, instr, dur).args;
+    const s6 = mainMod.fixupMiddleTrim(s5.args, instr, dur);
+    return mainMod.fixupSizeLimit(s6.args, instr, dur).args;
   };
   const pr = pipe(
     ['-i', '/v/clip.mp4', '-c:v', 'libvpx-vp9', '-an', '-c:a', 'libopus', '-pass', '1'],
@@ -296,6 +323,10 @@ async function main() {
   const preload = fs.readFileSync(path.join(__dirname, '../src/preload.js'), 'utf8');
   const renderer = fs.readFileSync(path.join(__dirname, '../src/renderer/renderer.js'), 'utf8');
   const html = fs.readFileSync(path.join(__dirname, '../src/renderer/index.html'), 'utf8');
+  // center-cut numbers are pre-computed like size limits so the model applies
+  // them verbatim; failures carry the raw output for the logs.
+  assert.ok(mainSrc.includes('Center cut: keep the middle'), 'translate must inject exact center-cut numbers');
+  assert.ok(mainSrc.includes('raw: rawOut'), 'failed translations must surface raw model output');
 
   // failure diagnostics: what the load depends on, in one pasteable object
   assert.strictEqual(typeof mainMod.llamaDiagnostics, 'function');
@@ -440,6 +471,7 @@ async function main() {
   assert.ok('loadErrorKind' in st, 'status must expose the classified error kind');
   assert.ok(st.msvc && typeof st.msvc.present === 'boolean', 'status must expose the MSVC runtime state');
   assert.strictEqual(st.ready, false, 'ready must be false before any session exists');
+  assert.strictEqual(st.portableWritable, null, 'writability is null outside portable runs');
   assert.ok(renderer.includes('Loading LLM engine locally'), 'badge must show background loading');
   assert.ok(renderer.includes('LLM failed to load'), 'failed loads must explain themselves in the UI');
   assert.ok(renderer.includes('nothing will translate until this is fixed'), 'failed badge must not promise a load');
@@ -536,6 +568,7 @@ async function main() {
   // time/size requests need the probed duration - never translate blind.
   assert.ok(renderer.includes('Still reading the video file'), 'probe in flight must block time requests');
   assert.ok(renderer.includes('duration is unknown'), 'unknown duration must block time requests');
+  assert.ok(renderer.includes('middle'), 'the duration gate must cover middle-N requests');
   console.log('[smoke] model download UI OK');
 
   // windows packaging: thin installer (model fetched on first launch)
@@ -549,6 +582,21 @@ async function main() {
   assert.ok(!(pkg.build.files || []).some((f) => f.includes('.gguf')), 'installer stays thin - no model weights bundled');
   assert.ok((pkg.build.files || []).includes('scripts/download-model.js'), 'first-launch downloader must ship in the app');
   assert.strictEqual(pkg.build.nsis && pkg.build.nsis.include, 'assets/vc-redist.nsh', 'installer must bundle the MSVC redist step');
+  // installer branding: app icon plus warm-charcoal sidebar/header bitmaps
+  // instead of the stock NSIS graphics.
+  assert.strictEqual(pkg.build.nsis.installerIcon, 'assets/icon.ico', 'installer must use the app icon');
+  assert.strictEqual(pkg.build.nsis.uninstallerIcon, 'assets/icon.ico', 'uninstaller must use the app icon');
+  assert.strictEqual(pkg.build.nsis.installerSidebar, 'assets/installerSidebar.bmp', 'installer must use the branded sidebar');
+  assert.strictEqual(pkg.build.nsis.uninstallerSidebar, 'assets/installerSidebar.bmp', 'uninstaller must reuse the branded sidebar');
+  assert.strictEqual(pkg.build.nsis.installerHeader, 'assets/installerHeader.bmp', 'installer must use the branded header');
+  for (const [bmp, w, h] of [['assets/installerSidebar.bmp', 164, 314], ['assets/installerHeader.bmp', 150, 57]]) {
+    const p = path.join(__dirname, '..', bmp);
+    assert.ok(fs.existsSync(p), `missing installer art: ${bmp}`);
+    const buf = fs.readFileSync(p);
+    assert.strictEqual(buf.slice(0, 2).toString('ascii'), 'BM', `${bmp} must be a Windows BMP`);
+    assert.strictEqual(buf.readInt32LE(18), w, `${bmp} must be ${w}px wide`);
+    assert.strictEqual(buf.readInt32LE(22), h, `${bmp} must be ${h}px tall`);
+  }
   assert.ok(pkg.scripts['dist:win'] && pkg.scripts['fetch-vc-redist'], 'dist scripts must exist');
   assert.ok(pkg.scripts['dist:win'].includes('fetch-vc-redist'), 'dist:win must fetch the redist itself');
   assert.ok(pkg.engines && /24/.test(pkg.engines.node), 'package must declare the Node 24 floor');
@@ -647,6 +695,11 @@ async function main() {
   assert.ok(renderer.includes('portableNote'), 'renderer must show the fallback notice');
   assert.ok(renderer.includes('fallbackToAppData'), 'notice must follow engine status');
   assert.ok(html.includes('id="portableNote"'), 'UI must have the fallback notice element');
+  // the notice must not blame a read-only exe folder when the folder is
+  // writable and an app-data model is simply being reused.
+  assert.ok(mainSrc.includes('portableWritable'), 'model status must expose exe writability');
+  assert.ok(renderer.includes('portableWritable'), 'notice must distinguish unwritable exe from reused app-data copy');
+  assert.ok(renderer.includes('using the AI model found in Windows app data'), 'reused app-data copy must say so');
   // instruction label + example copy, output folder shortcut
   assert.ok(html.includes('Instruction in plain English'), 'instruction label must stress plain English');
   assert.ok(html.includes('Convert to mp4,'), 'example copy must use mp4');
@@ -981,6 +1034,13 @@ async function main() {
   // capitalized statuses
   for (const s of ["'Translating…'", "'Running…'", "'Failed'", "'Done'", "'Cancelled'", '>Idle<']) {
     assert.ok(renderer.includes(s) || html.includes(s), `status copy must include ${s}`);
+  }
+  // step outcomes must read at a glance: color + icon classes on top of the
+  // words (icons via CSS so screen readers hear only the words).
+  assert.ok(renderer.includes('setStatus'), 'statuses must go through the color/icon helper');
+  assert.ok(html.includes('progress-status st-idle'), 'statuses must start in the idle state');
+  for (const cls of ['.progress-status.st-active', '.progress-status.st-done', '.progress-status.st-failed', '.progress-status.st-cancelled']) {
+    assert.ok(css.includes(cls), `missing status style: ${cls}`);
   }
   for (const s of ["'translating…'", "'running…'", "'failed'", "'done'", "'cancelled'", '>idle<']) {
     assert.ok(!renderer.includes(s) && !html.includes(s), `lowercase status must be gone: ${s}`);

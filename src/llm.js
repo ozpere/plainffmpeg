@@ -35,6 +35,7 @@ const SYSTEM_PROMPT = [
   '- "trim/cut the FIRST N seconds" (keep the head): `-t N`.',
   '- "trim/cut/remove/delete the LAST N seconds" (cut the tail off, keep the head): `-t (duration - N)`.',
   '- "keep/extract only the LAST N seconds" (keep the tail): `-ss (duration - N)` with NO `-t`.',
+  '- "keep/extract the MIDDLE N seconds" (center cut): `-ss (duration - N)/2 -t N`.',
   '- "keep from second A to second B": `-ss A -t (B - A)`.',
   '- Place -ss/-t AFTER the -i flag (accurate seeking).',
   '- Never emit -ss and -t values that contradict the request (e.g. -ss 0 with -t 5 when asked for the last 5 seconds).',
@@ -66,6 +67,7 @@ const SYSTEM_PROMPT = [
   '- "Convert /tmp/in.mp4 to webm and mute it" → -i /tmp/in.mp4 -c:v libvpx-vp9 -an /tmp/in-out.webm',
   '- "Extract the audio of /tmp/in.mp4 as mp3" → -i /tmp/in.mp4 -vn -c:a libmp3lame /tmp/in-out.mp3',
   '- "Convert /tmp/in.mp4 (duration 60s) to 1080p mp4 below 100MB" → -i /tmp/in.mp4 -vf scale=-2:1080 -c:v libx264 -b:v 13573k -maxrate 13573k -bufsize 27146k -c:a aac -b:a 128k -movflags +faststart /tmp/in-out.mp4',
+  '- "Keep the middle 5 seconds of /tmp/in.mp4 (duration 60s), mute it" → -i /tmp/in.mp4 -ss 27.5 -t 5 -an /tmp/in-out.mp4',
 ].join('\n');
 
 let llamaInitPromise = null;
