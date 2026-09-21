@@ -380,6 +380,10 @@ function fixupSizeLimit(args, instruction, durationSec) {
   if (!Array.isArray(args)) return { args, corrections };
   const bytes = parseSizeLimit(instruction);
   if (!bytes || !(durationSec > 0)) return { args, corrections };
+  // Speed changes the output duration: budget for what actually comes out
+  // (slow motion stretches it, high speed shrinks it).
+  const speedX = parseSpeedFactor(instruction);
+  const effDuration = speedX ? durationSec / speedX : durationSec;
   const out = [...args];
   const hasAN = out.includes('-an');
   let audioBits = hasAN ? 0 : 128000;
@@ -401,7 +405,7 @@ function fixupSizeLimit(args, instruction, durationSec) {
       }
     }
   }
-  const videoBps = Math.max(100000, Math.floor((bytes * 8 * 0.98) / durationSec - audioBits));
+  const videoBps = Math.max(100000, Math.floor((bytes * 8 * 0.98) / effDuration - audioBits));
   const vk = Math.floor(videoBps / 1000);
   const setFlag = (flag, value) => {
     const i = out.findIndex((t) => t === flag);
@@ -425,7 +429,7 @@ function fixupSizeLimit(args, instruction, durationSec) {
       ? `${+(bytes / 1024 ** 3).toFixed(2)}GB`
       : `${+(bytes / 1024 ** 2).toFixed(1)}MB`;
     corrections.push(
-      `Size limit ${human} for ${fmtSec(durationSec)}s video: capped single-pass video at -b:v ${vk}k`
+      `Size limit ${human} for ${fmtSec(effDuration)}s video: capped single-pass video at -b:v ${vk}k`
     );
   }
   return { args: out, corrections };
@@ -488,8 +492,8 @@ function trimNeedsDuration(kind) {
 
 // "last N seconds" needs the input duration to resolve. Removal phrasing
 // ("trim/cut/remove/delete the last N s") keeps [0, D-N]; anything else
-// ("keep/extract the last N s") keeps [D-N, end]. Rewrites only the
-// clear-cut wrong shape and leaves sane commands alone.
+// ("keep/extract the last N s") keeps [D-N, end], always normalized to
+// exactly -ss D-N (a wrong lone -ss or -t would keep the wrong window).
 function fixupLastTrim(args, instruction, durationSec) {
   const corrections = [];
   if (!durationSec || !(durationSec > 0) || !Array.isArray(args)) return { args, corrections };
@@ -519,25 +523,17 @@ function fixupLastTrim(args, instruction, durationSec) {
     return { args: out, corrections };
   }
 
-  // Keep [D-N, end]: needs -ss D-N and no -t.
+  // Keep [D-N, end]: needs -ss D-N and no -t. Always normalized: a wrong
+  // -ss alone or a lone -t would otherwise keep the wrong window silently.
   const want = fmtSec(durationSec - N);
   const wantNum = durationSec - N;
   const f = getTimeFlags(out);
-  const startsAtZero = f.ssIdx === -1 || f.ssVal === null || f.ssVal < 0.51;
-  if (f.ssIdx !== -1 && timesApprox(f.ssVal, wantNum) && f.tIdx !== -1 && f.tVal !== null
-      && (f.ssVal + f.tVal) < durationSec - 0.51) {
-    // Right start, but -t truncates the kept tail - drop it, keep to the end.
-    dropTimeFlag(out, '-t');
-    corrections.push(`-t cut the kept "last ${intent.raw}s" short - keeping everything from ${want}s to the end`);
-  } else if (f.ssIdx !== -1 && f.tIdx !== -1 && startsAtZero && timesApprox(f.tVal, N)) {
-    out[f.ssIdx + 1] = want;
-    dropTimeFlag(out, '-t');
-    corrections.push(`"last ${intent.raw}s" of ${fmtSec(durationSec)}s starts at ${want}s - rewrote -ss/-t`);
-  } else if (f.ssIdx === -1 && f.tIdx !== -1 && timesApprox(f.tVal, N)) {
-    out[f.tIdx] = '-ss';
-    out[f.tIdx + 1] = want;
-    corrections.push(`"last ${intent.raw}s" of ${fmtSec(durationSec)}s starts at ${want}s - replaced -t with -ss`);
+  if (f.ssIdx !== -1 && timesApprox(f.ssVal, wantNum) && f.tIdx === -1) {
+    return { args: out, corrections };
   }
+  setTimeFlags(out, want, null);
+  dropTimeFlag(out, '-t');
+  corrections.push(`"last ${intent.raw}s" of ${fmtSec(durationSec)}s starts at ${want}s - keeping everything from ${want}s to the end`);
   return { args: out, corrections };
 }
 
@@ -942,6 +938,12 @@ function fixupGif(args, instruction) {
     appendVideoFilter(out, 'scale=480:-1:flags=lanczos');
     corrections.push('GIF: scaled with scale=480:-1:flags=lanczos');
   }
+  // The gif container takes only its default encoder - an explicit -c:v (or
+  // tuning for it) fails the run, so it goes.
+  const droppedCodecs = dropValuedFlags(out, ['-c:v', '-preset', '-tune', '-crf', '-pix_fmt']);
+  if (droppedCodecs.length > 0) {
+    corrections.push(`GIF: dropped encoder settings (${droppedCodecs.join(', ')}) - gif uses its default encoder`);
+  }
   if (!out.includes('-an')) {
     const dropped = dropValuedFlags(out, ['-c:a', '-b:a', '-ac', '-ar', '-af', '-filter:a']);
     insertBeforeOutput(out, '-an');
@@ -975,6 +977,13 @@ function fixupThumbnail(args, instruction, duration) {
     return { args, corrections };
   }
   const out = [...args];
+  // A still takes the image container's default encoder: an explicit video
+  // codec (or tuning for it) either fails the run or writes a corrupt file,
+  // so it goes. -pix_fmt stays - it is valid for stills.
+  const droppedCodecs = dropValuedFlags(out, ['-c:v', '-preset', '-tune', '-crf']);
+  if (droppedCodecs.length > 0) {
+    corrections.push(`Thumbnail: dropped encoder settings (${droppedCodecs.join(', ')}) - the image container picks its encoder`);
+  }
   if (parseTrimIntent(instr).kind === 'none') {
     setTimeFlags(out, parseThumbTime(instr, duration), null);
     if (dropTimeFlag(out, '-t')) corrections.push('Thumbnail: dropped -t (a still needs no duration window)');
@@ -1011,11 +1020,13 @@ function fixupThumbnail(args, instruction, duration) {
 function buildSizeLine(instruction, duration) {
   const sizeBytes = parseSizeLimit(instruction);
   if (!sizeBytes || !(duration > 0)) return '';
+  const speedX = parseSpeedFactor(instruction);
+  const effDuration = speedX ? duration / speedX : duration;
   const audioBits = 128000;
-  const vk = Math.floor(Math.max(100000, Math.floor((sizeBytes * 8 * 0.98) / duration - audioBits)) / 1000);
+  const vk = Math.floor(Math.max(100000, Math.floor((sizeBytes * 8 * 0.98) / effDuration - audioBits)) / 1000);
   return `Size limit: ${(sizeBytes / 1024 ** 3 >= 1
     ? `${+(sizeBytes / 1024 ** 3).toFixed(2)}GB`
-    : `${+(sizeBytes / 1024 ** 2).toFixed(1)}MB`)} max for this ${duration}s video. ` +
+    : `${+(sizeBytes / 1024 ** 2).toFixed(1)}MB`)} max for this ${effDuration}s video. ` +
     `Encode video at about ${vk}k: use exactly -b:v ${vk}k -maxrate ${vk}k -bufsize ${vk * 2}k, ` +
     `audio -c:a aac -b:a 128k, single pass only.\n`;
 }

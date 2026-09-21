@@ -193,6 +193,16 @@ async function main() {
   lt = mainMod.fixupLastTrim(['-i', 'in.mp4', '-ss', '22.49', '-t', '2', 'out.mkv'], 'keep the last 5 seconds', 27.49);
   assert.deepStrictEqual(lt.args, ['-i', 'in.mp4', '-ss', '22.49', 'out.mkv']);
   assert.strictEqual(lt.corrections.length, 1);
+  // keep-tail always normalizes: wrong lone -ss or -t are rewritten, not kept
+  lt = mainMod.fixupLastTrim(['-i', 'in.mp4', '-ss', '10', 'out.mkv'], 'keep the last 5 seconds', 27.49);
+  assert.deepStrictEqual(lt.args, ['-i', 'in.mp4', '-ss', '22.49', 'out.mkv']);
+  assert.strictEqual(lt.corrections.length, 1);
+  lt = mainMod.fixupLastTrim(['-i', 'in.mp4', '-t', '22.49', 'out.mkv'], 'keep the last 5 seconds', 27.49);
+  assert.deepStrictEqual(lt.args, ['-i', 'in.mp4', '-ss', '22.49', 'out.mkv']);
+  assert.strictEqual(lt.corrections.length, 1);
+  lt = mainMod.fixupLastTrim(['-i', 'in.mp4', '-ss', '22.49', 'out.mkv'], 'keep the last 5 seconds', 27.49);
+  assert.deepStrictEqual(lt.args, ['-i', 'in.mp4', '-ss', '22.49', 'out.mkv']);
+  assert.strictEqual(lt.corrections.length, 0, 'correct tail untouched');
   // unknown duration or no last-N → untouched
   lt = mainMod.fixupLastTrim(['-i', 'in.mp4', '-ss', '0', '-t', '5', 'out.mkv'], 'trim the last 5 seconds', null);
   assert.deepStrictEqual(lt.args, ['-i', 'in.mp4', '-ss', '0', '-t', '5', 'out.mkv']);
@@ -344,19 +354,25 @@ async function main() {
   // gif: defaults filled, audio stripped to -an
   assert.strictEqual(typeof mainMod.fixupGif, 'function');
   let gf = mainMod.fixupGif(['-i', 'in.mp4', '-c:v', 'libx264', 'out.gif'], 'convert to gif');
-  assert.deepStrictEqual(gf.args, ['-i', 'in.mp4', '-c:v', 'libx264', '-vf', 'fps=10,scale=480:-1:flags=lanczos', '-an', 'out.gif']);
+  assert.deepStrictEqual(gf.args, ['-i', 'in.mp4', '-vf', 'fps=10,scale=480:-1:flags=lanczos', '-an', 'out.gif']);
   gf = mainMod.fixupGif(['-i', 'in.mp4', '-vf', 'fps=10,scale=480:-1:flags=lanczos', '-c:a', 'aac', 'out.gif'], 'to gif');
   assert.ok(!gf.args.includes('-c:a') && gf.args.includes('-an'), 'gif audio becomes -an');
+  // an explicit video codec would fail the gif container - it goes
+  gf = mainMod.fixupGif(['-i', 'in.mp4', '-c:v', 'libx264', '-an', 'out.gif'], 'to gif');
+  assert.ok(!gf.args.includes('-c:v') && !gf.args.includes('libx264'), 'gif uses its default encoder');
   gf = mainMod.fixupGif(['-i', 'in.mp4', 'out.mp4'], 'convert to mp4');
   assert.deepStrictEqual(gf.args, ['-i', 'in.mp4', 'out.mp4'], 'non-gif untouched');
   // thumbnail: time, frame, container, no bitrate
   assert.strictEqual(typeof mainMod.fixupThumbnail, 'function');
   assert.strictEqual(mainMod.parseThumbTime('thumbnail at 10 seconds', 60), '10');
   assert.strictEqual(mainMod.parseThumbTime('thumbnail', 60), '30', 'bare thumbnail uses the middle');
-  let th = mainMod.fixupThumbnail(['-i', 'in.mp4', '-c:v', 'libx264', 'out.mp4'], 'thumbnail at 10 seconds', 60);
-  assert.deepStrictEqual(th.args, ['-i', 'in.mp4', '-c:v', 'libx264', '-ss', '10', '-frames:v', '1', 'out.png']);
+  let   th = mainMod.fixupThumbnail(['-i', 'in.mp4', '-c:v', 'libx264', 'out.mp4'], 'thumbnail at 10 seconds', 60);
+  assert.deepStrictEqual(th.args, ['-i', 'in.mp4', '-ss', '10', '-frames:v', '1', 'out.png']);
   th = mainMod.fixupThumbnail(['-i', 'in.mp4', '-b:v', '1000k', 'out.mp4'], 'poster frame', 60);
   assert.ok(!th.args.includes('-b:v') && th.args[th.args.length - 1] === 'out.png', 'still has no bitrate, uses an image container');
+  // an explicit video codec would corrupt the still - the container decides
+  th = mainMod.fixupThumbnail(['-i', 'in.mp4', '-c:v', 'libx264', 'out.mp4'], 'thumbnail at 10 seconds', 60);
+  assert.deepStrictEqual(th.args, ['-i', 'in.mp4', '-ss', '10', '-frames:v', '1', 'out.png']);
   th = mainMod.fixupThumbnail(['-i', 'in.mp4', 'out.mp4'], 'convert to mp4', 60);
   assert.deepStrictEqual(th.args, ['-i', 'in.mp4', 'out.mp4'], 'non-thumbnail untouched');
   // remux intent drops filters instead of replacing the codec
@@ -427,6 +443,13 @@ async function main() {
   // no duration → untouched (cannot do the math)
   sz = mainMod.fixupSizeLimit(['-i', 'in.mp4', 'out.mp4'], 'below 50MB', null);
   assert.deepStrictEqual(sz.args, ['-i', 'in.mp4', 'out.mp4']);
+  // speed stretches the output: slow motion budgets the longer duration
+  sz = mainMod.fixupSizeLimit(
+    ['-i', 'in.mp4', '-c:v', 'libx264', '-c:a', 'aac', 'out.mp4'],
+    'slow motion, below 100MB', 60
+  );
+  assert.ok(sz.args.includes('6722k') && !sz.args.includes('13573k'), 'slow-mo budgets 120s of output, not 60s');
+  assert.ok(mainMod.buildSizeLine('slow motion, below 100MB', 60).includes('6722k'), 'size prompt must budget the stretched output');
   console.log('[smoke] fixupSizeLimit OK');
 
   // regression corpus: raw model output -> final args through the real order.

@@ -60,7 +60,7 @@ Order is fixed in `runTranslationPipeline`:
 5. `fixupInput` - replace placeholder/missing `-i` (e.g. `input.mp4`) with the loaded video path. Existing real file is untouched.
 6. `fixupConflicts` - strip `-pass`/`-passlogfile` (single-shot runner), drop audio flags under `-an`, fix `-c:v copy` + video filters via container-aware codec (explicit remux intent drops the filters and keeps `copy` instead). Needs instruction words, not the output token.
 7. `ensureOutputFile` - drop trailing valued flags left by truncation (else the output is swallowed as a flag value), then append `output.<ext>` if missing. Ext comes from instruction words, else codec hints, else `.mp4`. Runs BEFORE trim/size so their insertions slot before a real trailing output (never split a flag/value pair).
-8. `fixupLastTrim` - needs `duration`. "trim/cut/remove the last N" keeps `[0, D-N]` via `-t`. "keep/extract only the last N" keeps tail via `-ss D-N`, no `-t`.
+8. `fixupLastTrim` - needs `duration`. "trim/cut/remove the last N" keeps `[0, D-N]` via `-t`. "keep/extract only the last N" always normalizes to `-ss D-N`, no `-t`.
 9. `fixupMiddleTrim` - needs `duration`. "keep/extract the middle N" keeps the center cut `[(D-N)/2, (D-N)/2+N]` via `-ss S -t N`. Exact numbers are also pre-computed into the prompt (`Center cut: ...`), same pattern as size limits.
 10. `fixupFirstTrim` - no `duration` needed. "keep the first N" keeps `[0, N]` via `-t N` (strips `-ss`); "remove the first N" keeps `[N, end]` via `-ss N` (drops `-t`).
 11. `fixupRangeTrim` - no `duration` needed. "keep from A to B" keeps `[A, B]` via `-ss A -t (B-A)`. Exact numbers are also pre-computed into the prompt (`Range: ...`).
