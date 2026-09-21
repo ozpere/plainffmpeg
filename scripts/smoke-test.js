@@ -1233,7 +1233,7 @@ async function main() {
   // NOTE: built from a char code so this file stays clean of the banned char.
   const bannedDash = String.fromCharCode(0x2014);
   for (const f of ['src/main.js', 'src/fixups.js', 'src/paths.js', 'src/llm.js', 'src/preload.js', 'src/renderer/index.html',
-    'src/renderer/renderer.js', 'src/renderer/styles.css', 'package.json',
+    'src/renderer/renderer.js', 'src/renderer/styles.css', 'package.json', 'AGENTS.md', 'README.md',
     'scripts/download-model.js', 'scripts/fetch-vc-redist.js', 'scripts/install-windows.js', 'scripts/translate-cases.js',
     'assets/vc-redist.nsh', '.github/workflows/release.yml']) {
     const content = fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
