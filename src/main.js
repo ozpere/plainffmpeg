@@ -18,6 +18,14 @@ const {
   fixupMiddleTrim,
   fixupFirstTrim,
   fixupRangeTrim,
+  fixupSpeed,
+  fixupFps,
+  fixupWidthScale,
+  fixupRotate,
+  parseSpeedFactor,
+  parseFps,
+  parseWidth,
+  parseRotate,
   fixupSizeLimit,
   fixupConflicts,
   ensureOutputFile,
@@ -29,6 +37,7 @@ const {
   buildSizeLine,
   buildMiddleLine,
   buildRangeLine,
+  buildSpeedLine,
   runTranslationPipeline,
   quoteArgs,
   ffmpegFailureHint,
@@ -354,7 +363,8 @@ async function handleTranslatePrompt({ instruction, inputFile, duration, width, 
   const sizeLine = buildSizeLine(instruction, duration);
   const middleLine = buildMiddleLine(instruction, duration);
   const rangeLine = buildRangeLine(instruction);
-  const userPrompt = `Input file: ${inputFile || 'input.mp4'}\n${durLine}${dimLine}${sizeLine}${middleLine}${rangeLine}Task: ${instruction || ''}\nFFmpeg args:\n/no_think`;
+  const speedLine = buildSpeedLine(instruction);
+  const userPrompt = `Input file: ${inputFile || 'input.mp4'}\n${durLine}${dimLine}${sizeLine}${middleLine}${rangeLine}${speedLine}Task: ${instruction || ''}\nFFmpeg args:\n/no_think`;
   // No silent fallback: any LLM problem is returned as an error so the UI
   // can alert the user instead of running a guessed-up command.
   let rawOut = '';
@@ -646,6 +656,14 @@ module.exports = {
   fixupMiddleTrim,
   fixupFirstTrim,
   fixupRangeTrim,
+  fixupSpeed,
+  fixupFps,
+  fixupWidthScale,
+  fixupRotate,
+  parseSpeedFactor,
+  parseFps,
+  parseWidth,
+  parseRotate,
   fixupSizeLimit,
   fixupConflicts,
   ensureOutputFile,
@@ -655,6 +673,7 @@ module.exports = {
   buildSizeLine,
   buildMiddleLine,
   buildRangeLine,
+  buildSpeedLine,
   runTranslationPipeline,
   probeMedia,
   handleRunFfmpeg,

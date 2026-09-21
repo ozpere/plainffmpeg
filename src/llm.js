@@ -36,6 +36,12 @@ const SYSTEM_PROMPT = [
   '- "trim/cut the FIRST N seconds" (keep the head): `-t N`.',
   '- "remove/delete the FIRST N seconds" (cut the head off, keep the rest): `-ss N` with NO `-t`.',
   '- "keep/extract from second A to second B" (range): `-ss A -t (B - A)` (e.g. seconds 10 to 20 → `-ss 10 -t 10`).',
+  '',
+  'SPEED, RATE, AND GEOMETRY (append to one comma-joined -vf):',
+  '- "2x faster / 1.5x speed / half speed / slow motion": video `setpts=0.5*PTS` for 2x (i.e. `setpts=(1/X)*PTS`), audio `atempo=X` with one atempo per 0.5-2.0 step (4x → `atempo=2,atempo=2`).',
+  '- "30fps / cap at 24 fps": `fps=N`.',
+  '- "... N wide" (target width, aspect kept): `scale=N:-2` with even N.',
+  '- "rotate 90 (clockwise)" → `transpose=1`; "rotate 270" (or 90 CCW) → `transpose=2`; "rotate 180" → `transpose=2,transpose=2`; "flip horizontal/vertical" → `hflip`/`vflip`.',
   '- "trim/cut/remove/delete the LAST N seconds" (cut the tail off, keep the head): `-t (duration - N)`.',
   '- "keep/extract only the LAST N seconds" (keep the tail): `-ss (duration - N)` with NO `-t`.',
   '- "keep/extract the MIDDLE N seconds" (center cut): `-ss (duration - N)/2 -t N`.',
@@ -72,6 +78,7 @@ const SYSTEM_PROMPT = [
   '- "Convert /tmp/in.mp4 (duration 60s) to 1080p mp4 below 100MB" → -i /tmp/in.mp4 -vf scale=-2:1080 -c:v libx264 -b:v 13573k -maxrate 13573k -bufsize 27146k -c:a aac -b:a 128k -movflags +faststart /tmp/in-out.mp4',
   '- "Keep the middle 5 seconds of /tmp/in.mp4 (duration 60s), mute it" → -i /tmp/in.mp4 -ss 27.5 -t 5 -an /tmp/in-out.mp4',
   '- "Keep seconds 10 to 20 of /tmp/in.mp4" → -i /tmp/in.mp4 -ss 10 -t 10 /tmp/in-out.mp4',
+  '- "Speed up /tmp/in.mp4 2x" → -i /tmp/in.mp4 -vf setpts=0.5*PTS -af atempo=2 /tmp/in-out.mp4',
 ].join('\n');
 
 let llamaInitPromise = null;

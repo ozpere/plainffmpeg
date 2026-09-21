@@ -311,6 +311,19 @@ function dropTimeFlag(out, flag) {
   return true;
 }
 
+// Append a filter to the single video/audio chain, creating it if missing.
+function appendVideoFilter(out, filter) {
+  const i = out.findIndex((t) => t === '-vf' || t === '-filter:v');
+  if (i !== -1 && typeof out[i + 1] === 'string') out[i + 1] = `${out[i + 1]},${filter}`;
+  else insertBeforeOutput(out, '-vf', filter);
+}
+
+function appendAudioFilter(out, filter) {
+  const i = out.findIndex((t) => t === '-af' || t === '-filter:a');
+  if (i !== -1 && typeof out[i + 1] === 'string') out[i + 1] = `${out[i + 1]},${filter}`;
+  else insertBeforeOutput(out, '-af', filter);
+}
+
 // File-size constraint in the instruction ("below 2GB", "under 500MB",
 // "2GB file size", "500MB max") → bytes. Returns null when absent.
 function parseSizeLimit(instruction) {
@@ -662,6 +675,180 @@ function fixupConflicts(args, instruction) {
   return { args: out, corrections };
 }
 
+// Playback speed factor from the instruction ("2x faster", "half speed",
+// "slow down"). Bare "speed up" defaults to 2x, bare "slow down" to 0.5x.
+// Returns null when no speed intent is recognizable. Capped at 16x.
+function parseSpeedFactor(instruction) {
+  const instr = String(instruction || '');
+  const m = /(\d+(?:\.\d+)?)\s*[x×]\s*(?:faster|speed|quicker|slow(?:er)?|motion)/i.exec(instr);
+  if (m) {
+    const x = parseFloat(m[1]);
+    if (x > 0 && x <= 16) return x;
+    return null;
+  }
+  if (/\bhalf\s+speed\b|\bslow\s+motion\b/i.test(instr)) return 0.5;
+  if (/\bdouble\s+speed\b/i.test(instr)) return 2;
+  if (/\bspeed\b[\w\s]{0,12}\bup\b/i.test(instr)) return 2;
+  if (/\bslow\b[\w\s]{0,12}\bdown\b/i.test(instr)) return 0.5;
+  return null;
+}
+
+function fmtTempo(v) {
+  return String(Math.round(v * 100) / 100);
+}
+
+// atempo accepts 0.5-2.0 per instance - chain it for wider factors.
+function atempoChain(x) {
+  const parts = [];
+  let v = x;
+  let guard = 0;
+  while (v > 2 && guard++ < 8) { parts.push('2'); v /= 2; }
+  while (v < 0.5 && guard++ < 16) { parts.push('0.5'); v *= 2; }
+  parts.push(fmtTempo(v));
+  return parts.map((p) => `atempo=${p}`).join(',');
+}
+
+// Speed change: video via setpts, audio matched via atempo so A/V stay in
+// sync (a lone setpts silences nothing but desyncs everything). The factor
+// comes from the instruction when explicit, else from the model's own setpts
+// (then only the audio side is derived). Muted output needs no audio side.
+function fixupSpeed(args, instruction) {
+  const corrections = [];
+  if (!Array.isArray(args)) return { args, corrections };
+  const explicit = parseSpeedFactor(instruction);
+  let videoX = null;
+  const joined = args.join(' ');
+  let m = /setpts=([\d.]+)\*PTS/.exec(joined);
+  if (m && parseFloat(m[1]) > 0) videoX = 1 / parseFloat(m[1]);
+  else {
+    m = /setpts=PTS\/([\d.]+)/.exec(joined);
+    if (m && parseFloat(m[1]) > 0) videoX = parseFloat(m[1]);
+  }
+  const x = explicit !== null ? explicit : videoX;
+  if (x === null || !(x > 0) || x > 16 || x === 1) return { args, corrections };
+
+  const out = [...args];
+  const wantVf = `setpts=${fmtTempo(1 / x)}*PTS`;
+  const vfIdx = out.findIndex((t) => t === '-vf' || t === '-filter:v');
+  if (vfIdx !== -1 && typeof out[vfIdx + 1] === 'string' && /setpts=/.test(out[vfIdx + 1])) {
+    const nv = out[vfIdx + 1].replace(/setpts=[^,]*/g, wantVf);
+    if (nv !== out[vfIdx + 1]) {
+      out[vfIdx + 1] = nv;
+      corrections.push(`Speed ${fmtTempo(x)}x: normalized video to ${wantVf}`);
+    }
+  } else {
+    appendVideoFilter(out, wantVf);
+    corrections.push(`Speed ${fmtTempo(x)}x: video runs at ${wantVf}`);
+  }
+  if (!out.includes('-an')) {
+    const wantAf = atempoChain(x);
+    const afIdx = out.findIndex((t) => t === '-af' || t === '-filter:a');
+    if (afIdx !== -1 && typeof out[afIdx + 1] === 'string' && /atempo=/.test(out[afIdx + 1])) {
+      const nv = out[afIdx + 1].replace(/atempo=[^,]*(,atempo=[^,]*)*/g, wantAf);
+      if (nv !== out[afIdx + 1]) {
+        out[afIdx + 1] = nv;
+        corrections.push(`Speed ${fmtTempo(x)}x: matched audio with ${wantAf} (keeps A/V in sync)`);
+      }
+    } else {
+      appendAudioFilter(out, wantAf);
+      corrections.push(`Speed ${fmtTempo(x)}x: matched audio with ${wantAf} (keeps A/V in sync)`);
+    }
+  }
+  return { args: out, corrections };
+}
+
+// Frame-rate cap from the instruction ("30fps", "cap at 24 fps").
+function parseFps(instruction) {
+  const m = /(\d+(?:\.\d+)?)\s*fps/i.exec(String(instruction || ''));
+  if (!m) return null;
+  const n = Math.round(parseFloat(m[1]));
+  return n >= 1 && n <= 120 ? n : null;
+}
+
+function fixupFps(args, instruction) {
+  const corrections = [];
+  if (!Array.isArray(args)) return { args, corrections };
+  const n = parseFps(instruction);
+  if (n === null) return { args, corrections };
+  const out = [...args];
+  const vfIdx = out.findIndex((t) => t === '-vf' || t === '-filter:v');
+  if (vfIdx !== -1 && typeof out[vfIdx + 1] === 'string' && /fps=/.test(out[vfIdx + 1])) {
+    const nv = out[vfIdx + 1].replace(/fps=[\d.]*/g, `fps=${n}`);
+    if (nv !== out[vfIdx + 1]) {
+      out[vfIdx + 1] = nv;
+      corrections.push(`Frame rate: normalized -vf to fps=${n}`);
+    }
+  } else {
+    appendVideoFilter(out, `fps=${n}`);
+    corrections.push(`Frame rate: capped at fps=${n}`);
+  }
+  return { args: out, corrections };
+}
+
+// Target width from the instruction ("640 wide"): scale=W:-2, W evened down.
+// A width intent replaces any other scale= filter (it names the geometry).
+function parseWidth(instruction) {
+  const m = /(\d{3,5})\s*(?:px|pixels?)?\s*wide/i.exec(String(instruction || ''));
+  if (!m) return null;
+  let w = parseInt(m[1], 10);
+  if (w < 16 || w > 7680) return null;
+  if (w % 2 === 1) w -= 1;
+  return w;
+}
+
+function fixupWidthScale(args, instruction) {
+  const corrections = [];
+  if (!Array.isArray(args)) return { args, corrections };
+  const w = parseWidth(instruction);
+  if (w === null) return { args, corrections };
+  const out = [...args];
+  const vfIdx = out.findIndex((t) => t === '-vf' || t === '-filter:v');
+  if (vfIdx !== -1 && typeof out[vfIdx + 1] === 'string' && /scale=/.test(out[vfIdx + 1])) {
+    const nv = out[vfIdx + 1].replace(/scale=[^,]*/g, `scale=${w}:-2`);
+    if (nv !== out[vfIdx + 1]) {
+      out[vfIdx + 1] = nv;
+      corrections.push(`Width ${w}px: replaced scale filter with scale=${w}:-2`);
+    }
+  } else {
+    appendVideoFilter(out, `scale=${w}:-2`);
+    corrections.push(`Width ${w}px: scaling with scale=${w}:-2 (aspect kept)`);
+  }
+  return { args: out, corrections };
+}
+
+// Rotation / flip from the instruction: 90 CW → transpose=1, 270 (or 90
+// CCW) → transpose=2, 180 → transpose=2,transpose=2, flips → hflip/vflip.
+function parseRotate(instruction) {
+  const instr = String(instruction || '');
+  const m = /rotat(?:e|ing)?\s*(?:by\s*)?(90|180|270)(?:\s*(?:degrees?|°))?/i.exec(instr);
+  const ccw = /counter|ccw|anti[\s-]?clockwise/i.test(instr);
+  if (m) {
+    const d = parseInt(m[1], 10);
+    if (d === 180) return 'transpose=2,transpose=2';
+    if (d === 90) return ccw ? 'transpose=2' : 'transpose=1';
+    return ccw ? 'transpose=1' : 'transpose=2';
+  }
+  if (/\brotat/i.test(instr)) return ccw ? 'transpose=2' : 'transpose=1';
+  if (/\bflip\s+horiz/i.test(instr)) return 'hflip';
+  if (/\bflip\s+vert/i.test(instr)) return 'vflip';
+  return null;
+}
+
+function fixupRotate(args, instruction) {
+  const corrections = [];
+  if (!Array.isArray(args)) return { args, corrections };
+  const filter = parseRotate(instruction);
+  if (!filter) return { args, corrections };
+  const out = [...args];
+  const vfIdx = out.findIndex((t) => t === '-vf' || t === '-filter:v');
+  if (vfIdx !== -1 && typeof out[vfIdx + 1] === 'string' && out[vfIdx + 1].includes(filter)) {
+    return { args: out, corrections };
+  }
+  appendVideoFilter(out, filter);
+  corrections.push(`Rotation: applied ${filter}`);
+  return { args: out, corrections };
+}
+
 // Prompt-injection builders: exact numbers pre-computed deterministically so
 // the model only has to apply them verbatim (was inline in main.js).
 function buildSizeLine(instruction, duration) {
@@ -692,13 +879,25 @@ function buildRangeLine(instruction) {
     `Use exactly -ss ${fmtSec(intent.a)} -t ${fmtSec(intent.b - intent.a)}, placed after -i.\n`;
 }
 
+function buildSpeedLine(instruction) {
+  const x = parseSpeedFactor(instruction);
+  if (x === null || !(x > 0) || x > 16 || x === 1) return '';
+  return `Speed: play at ${fmtTempo(x)}x. ` +
+    `Use exactly -vf setpts=${fmtTempo(1 / x)}*PTS -af ${atempoChain(x)}.\n`;
+}
+
 // Fixed translation order in one place (was chained by hand in main.js and
-// re-implemented by the smoke-test pipe helper): token fixes, input,
+// re-implemented by the smoke-test pipe helper): token fixes, filter
+// construction (so fixupConflicts below sees every filter), input,
 // conflicts, output placeholder, trims, size cap.
 function runTranslationPipeline(tokens, context) {
   const { instruction, inputFile, duration } = context || {};
   const steps = [
     (a) => fixupArgs(a),
+    (a) => fixupSpeed(a, instruction),
+    (a) => fixupFps(a, instruction),
+    (a) => fixupWidthScale(a, instruction),
+    (a) => fixupRotate(a, instruction),
     (a) => fixupInput(a, inputFile),
     (a) => fixupConflicts(a, instruction),
     (a) => ensureOutputFile(a, instruction),
@@ -736,6 +935,8 @@ module.exports = {
   getTimeFlags,
   setTimeFlags,
   dropTimeFlag,
+  appendVideoFilter,
+  appendAudioFilter,
   parseTrimIntent,
   trimNeedsDuration,
   parseSizeLimit,
@@ -745,9 +946,19 @@ module.exports = {
   fixupMiddleTrim,
   fixupFirstTrim,
   fixupRangeTrim,
+  fixupSpeed,
+  fixupFps,
+  fixupWidthScale,
+  fixupRotate,
+  parseSpeedFactor,
+  parseFps,
+  parseWidth,
+  parseRotate,
+  atempoChain,
   fixupConflicts,
   buildSizeLine,
   buildMiddleLine,
   buildRangeLine,
+  buildSpeedLine,
   runTranslationPipeline,
 };

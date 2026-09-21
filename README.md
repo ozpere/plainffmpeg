@@ -116,6 +116,9 @@ models/                GGUF weights live here (gitignored, never committed)
   keeps the center cut (`-ss (duration-N)/2 -t N`); "keep the first N" keeps
   the head (`-t N`), "remove the first N" cuts the head off (`-ss N`), and
   "keep seconds A to B" keeps that window (`-ss A -t B-A`).
+- Speed ("2x faster", "slow motion") keeps audio in sync (`setpts` +
+  matched `atempo`); "N wide" scales to that width keeping aspect;
+  "rotate 90" / "flip horizontal" apply the matching video filter.
 - Size limits ("below 2GB") are enforced with single-pass capped
   bitrate computed from the probed duration - two-pass is never used.
 - Output extensions always follow the translated container, and the app

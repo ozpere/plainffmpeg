@@ -166,6 +166,41 @@ const TRANSLATE_CASES = [
     modelRaw: 'Of course honey! Here you go:\n-i input.mp4 -c:v libx264 -c:a aac clip-out.mp4',
     expectedArgs: ['-i', '/v/clip.mp4', '-c:v', 'libx264', '-c:a', 'aac', 'clip-out.mp4'],
   },
+  {
+    name: 'speed adds matched audio',
+    instruction: 'Speed up 2x',
+    duration: 30,
+    modelRaw: '-i input.mp4 -vf setpts=0.5*PTS clip-out.mp4',
+    expectedArgs: ['-i', '/v/clip.mp4', '-vf', 'setpts=0.5*PTS', '-af', 'atempo=2', 'clip-out.mp4'],
+  },
+  {
+    name: 'speed with copy re-encodes and syncs',
+    instruction: 'Speed up 2x',
+    duration: 30,
+    modelRaw: '-i input.mp4 -c:v copy clip-out.mp4',
+    expectedArgs: ['-i', '/v/clip.mp4', '-c:v', 'libx264', '-vf', 'setpts=0.5*PTS', '-af', 'atempo=2', 'clip-out.mp4'],
+  },
+  {
+    name: 'fps cap appended',
+    instruction: 'Cap it at 30fps',
+    duration: 30,
+    modelRaw: '-i input.mp4 -c:v libx264 clip-out.mp4',
+    expectedArgs: ['-i', '/v/clip.mp4', '-c:v', 'libx264', '-vf', 'fps=30', 'clip-out.mp4'],
+  },
+  {
+    name: 'width scale appended',
+    instruction: 'Make it 640 wide',
+    duration: 30,
+    modelRaw: '-i input.mp4 -c:v libx264 clip-out.mp4',
+    expectedArgs: ['-i', '/v/clip.mp4', '-c:v', 'libx264', '-vf', 'scale=640:-2', 'clip-out.mp4'],
+  },
+  {
+    name: 'rotation appended',
+    instruction: 'Rotate 90 degrees clockwise',
+    duration: 30,
+    modelRaw: '-i input.mp4 -c:v libx264 clip-out.mp4',
+    expectedArgs: ['-i', '/v/clip.mp4', '-c:v', 'libx264', '-vf', 'transpose=1', 'clip-out.mp4'],
+  },
 ];
 
 module.exports = { TRANSLATE_CASES };

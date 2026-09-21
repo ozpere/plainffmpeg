@@ -283,6 +283,53 @@ async function main() {
   assert.strictEqual(mainMod.buildRangeLine('convert to mp4'), '', 'non-range means no range line');
   assert.ok(mainMod.SYSTEM_PROMPT.includes('small talk'), 'prompt must tell the model to ignore chit-chat');
   assert.ok(mainMod.SYSTEM_PROMPT.includes('from second A'), 'prompt must teach ranges');
+  // speed: explicit factors, words, model-emitted setpts, atempo chains
+  assert.strictEqual(typeof mainMod.fixupSpeed, 'function');
+  assert.strictEqual(fixupsMod.fixupSpeed, mainMod.fixupSpeed, 'fixups must be the same functions main re-exports');
+  assert.strictEqual(mainMod.parseSpeedFactor('Speed up 2x'), 2);
+  assert.strictEqual(mainMod.parseSpeedFactor('half speed please'), 0.5);
+  assert.strictEqual(mainMod.parseSpeedFactor('slow it down'), 0.5);
+  assert.strictEqual(mainMod.parseSpeedFactor('convert to mp4'), null);
+  assert.strictEqual(fixupsMod.atempoChain(4), 'atempo=2,atempo=2');
+  assert.strictEqual(fixupsMod.atempoChain(0.25), 'atempo=0.5,atempo=0.5');
+  assert.strictEqual(fixupsMod.atempoChain(1.5), 'atempo=1.5');
+  let sp = mainMod.fixupSpeed(['-i', 'in.mp4', '-vf', 'setpts=0.5*PTS', 'out.mp4'], 'Speed up 2x');
+  assert.deepStrictEqual(sp.args, ['-i', 'in.mp4', '-vf', 'setpts=0.5*PTS', '-af', 'atempo=2', 'out.mp4']);
+  // model setpts alone still gets matched audio (factor read from the args)
+  sp = mainMod.fixupSpeed(['-i', 'in.mp4', '-vf', 'setpts=2*PTS', 'out.mp4'], 'slow motion');
+  assert.deepStrictEqual(sp.args, ['-i', 'in.mp4', '-vf', 'setpts=2*PTS', '-af', 'atempo=0.5', 'out.mp4']);
+  // muted output needs no audio side
+  sp = mainMod.fixupSpeed(['-i', 'in.mp4', '-an', 'out.mp4'], 'Speed up 2x');
+  assert.deepStrictEqual(sp.args, ['-i', 'in.mp4', '-an', '-vf', 'setpts=0.5*PTS', 'out.mp4']);
+  assert.ok(!sp.args.includes('-af'), 'muted speed needs no atempo');
+  // no speed intent, sane speed untouched
+  sp = mainMod.fixupSpeed(['-i', 'in.mp4', 'out.mp4'], 'convert to mp4');
+  assert.deepStrictEqual(sp.args, ['-i', 'in.mp4', 'out.mp4']);
+  sp = mainMod.fixupSpeed(['-i', 'in.mp4', '-vf', 'setpts=0.5*PTS', '-af', 'atempo=2', 'out.mp4'], 'Speed up 2x');
+  assert.strictEqual(sp.corrections.length, 0, 'correct speed untouched');
+  assert.ok(mainMod.buildSpeedLine('Speed up 2x').includes('-vf setpts=0.5*PTS -af atempo=2'), 'speed builder must pre-compute both sides');
+  // fps cap
+  assert.strictEqual(mainMod.parseFps('cap at 30fps'), 30);
+  assert.strictEqual(mainMod.parseFps('convert to mp4'), null);
+  let fp = mainMod.fixupFps(['-i', 'in.mp4', '-c:v', 'libx264', 'out.mp4'], 'Cap it at 30fps');
+  assert.deepStrictEqual(fp.args, ['-i', 'in.mp4', '-c:v', 'libx264', '-vf', 'fps=30', 'out.mp4']);
+  fp = mainMod.fixupFps(['-i', 'in.mp4', '-vf', 'scale=-2:720,fps=60', 'out.mp4'], 'cap at 30fps');
+  assert.deepStrictEqual(fp.args, ['-i', 'in.mp4', '-vf', 'scale=-2:720,fps=30', 'out.mp4']);
+  // width: evened, replaces other scales
+  assert.strictEqual(mainMod.parseWidth('make it 640 wide'), 640);
+  assert.strictEqual(mainMod.parseWidth('make it 641 wide'), 640, 'odd width evens down');
+  assert.strictEqual(mainMod.parseWidth('make it 720p'), null, 'heights are not widths');
+  let wd = mainMod.fixupWidthScale(['-i', 'in.mp4', '-vf', 'scale=-2:720', 'out.mp4'], 'make it 640 wide');
+  assert.deepStrictEqual(wd.args, ['-i', 'in.mp4', '-vf', 'scale=640:-2', 'out.mp4']);
+  // rotate / flip
+  assert.strictEqual(mainMod.parseRotate('rotate 90 degrees clockwise'), 'transpose=1');
+  assert.strictEqual(mainMod.parseRotate('rotate 90 counterclockwise'), 'transpose=2');
+  assert.strictEqual(mainMod.parseRotate('rotate 180'), 'transpose=2,transpose=2');
+  assert.strictEqual(mainMod.parseRotate('flip horizontal'), 'hflip');
+  assert.strictEqual(mainMod.parseRotate('convert to mp4'), null);
+  let rt = mainMod.fixupRotate(['-i', 'in.mp4', '-vf', 'scale=-2:720', 'out.mp4'], 'rotate 90 degrees');
+  assert.deepStrictEqual(rt.args, ['-i', 'in.mp4', '-vf', 'scale=-2:720,transpose=1', 'out.mp4']);
+  assert.ok(mainMod.SYSTEM_PROMPT.includes('setpts=(1/X)*PTS'), 'prompt must teach speed filters');
   // contradictions ffmpeg rejects: two-pass, -an with audio flags, copy with filters
   assert.strictEqual(typeof mainMod.fixupConflicts, 'function');
   let cf = mainMod.fixupConflicts(['-i', 'in.mp4', '-c:v', 'libx264', '-pass', '1', 'out.mp4']);
