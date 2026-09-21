@@ -396,9 +396,11 @@ function fixupSizeLimit(args, instruction, durationSec) {
 }
 
 // Single source of truth for trim intent: exactly one kind per instruction,
-// so trim layers are mutually exclusive structurally. A "middle" request wins
-// over a "last" one when both appear (it runs later in the pipeline anyway).
-// Standing default preserved: bare "the last N s" with no verb keeps the tail.
+// so trim layers are mutually exclusive structurally. Priority: middle, then
+// last, then first, then range (a pathological multi-trim instruction gets
+// the most specific match). Standing default preserved: bare "the last N s"
+// with no verb keeps the tail. Single-N kinds return {kind, n, raw}; range
+// returns {kind, a, b, rawA, rawB} (kept seconds [a, b]).
 function parseTrimIntent(instruction) {
   const instr = String(instruction || '');
   const num = (re) => {
@@ -416,6 +418,27 @@ function parseTrimIntent(instruction) {
     const removal = !keepTail
       && /(remove|removing|delete|delet|trim|trimming|cut|cutting|drop|strip|without)/i.test(instr);
     return { kind: removal ? 'last-remove' : 'last-keep', n: last.n, raw: last.raw };
+  }
+  const first = num(new RegExp('\\bfirst\\s+(\\d+(?:\\.\\d+)?)' + SEC, 'i'));
+  if (first && first.n > 0) {
+    // Mirror of the last-N verbs: "keep the first N" keeps the head [0, N],
+    // "remove the first N" cuts the head off and keeps [N, end].
+    const keepHead = /\b(keep|keeping|extract|only|just)\b[\w\s]{0,12}\bfirst\s+\d/i.test(instr);
+    const removal = !keepHead
+      && /(remove|removing|delete|delet|trim|trimming|cut|cutting|drop|strip|without)/i.test(instr);
+    return { kind: removal ? 'first-remove' : 'first-keep', n: first.n, raw: first.raw };
+  }
+  const rangeM = /(?:\bfrom\s+|\bbetween\s+)(\d+(?:\.\d+)?)\s*(?:s(?:ec(?:ond)?s?)?\s*)?(?:to|and|-)\s*(\d+(?:\.\d+)?)(?:\s*s(?:ec(?:ond)?s?)?)?\b/i.exec(instr)
+    || /\b(\d+(?:\.\d+)?)\s*(?:s(?:ec(?:ond)?s?)?\s*)?(?:to|-)\s*(\d+(?:\.\d+)?)\s*s(?:ec(?:ond)?s?)?\b/i.exec(instr)
+    || /\bseconds?\s+(\d+(?:\.\d+)?)\s*(?:to|-)\s*(\d+(?:\.\d+)?)\b/i.exec(instr);
+  // Keyword form ("from/between A to B") and leading-seconds form
+  // ("seconds A to B") need no trailing unit; the bare form requires one
+  // (so "720 to 1080" resolutions never match, and the b>a guard below
+  // rejects them anyway).
+  if (rangeM) {
+    const a = parseFloat(rangeM[1]);
+    const b = parseFloat(rangeM[2]);
+    if (a >= 0 && b > a) return { kind: 'range', a, b, rawA: rangeM[1], rawB: rangeM[2] };
   }
   return { kind: 'none', n: 0, raw: '' };
 }
@@ -506,6 +529,83 @@ function fixupMiddleTrim(args, instruction, durationSec) {
   return { args: out, corrections };
 }
 
+// "first N seconds" needs no duration: the head cut is self-contained.
+// "keep the first N" keeps [0, N] via -t N (any -ss contradicts the head);
+// "remove the first N" keeps [N, end] via -ss N (any -t truncates the rest).
+// A known duration only validates N against it - never blocks the rewrite.
+function fixupFirstTrim(args, instruction, durationSec) {
+  const corrections = [];
+  if (!Array.isArray(args)) return { args, corrections };
+  const intent = parseTrimIntent(instruction);
+  if (intent.kind !== 'first-keep' && intent.kind !== 'first-remove') return { args, corrections };
+  const N = intent.n;
+  if (!(N > 0)) return { args, corrections };
+  if (durationSec > 0 && N >= durationSec) return { args, corrections };
+
+  const out = [...args];
+  const want = fmtSec(N);
+  if (intent.kind === 'first-keep') {
+    let changed = false;
+    if (dropTimeFlag(out, '-ss')) changed = true;
+    const f = getTimeFlags(out);
+    if (f.tIdx !== -1) {
+      if (!timesApprox(f.tVal, N)) { out[f.tIdx + 1] = want; changed = true; }
+    } else {
+      insertBeforeOutput(out, '-t', want);
+      changed = true;
+    }
+    if (changed) corrections.push(`"first ${intent.raw}s" - keeping [0, ${want}s]`);
+    return { args: out, corrections };
+  }
+  let changed = false;
+  const f = getTimeFlags(out);
+  if (f.ssIdx !== -1) {
+    if (!timesApprox(f.ssVal, N)) { out[f.ssIdx + 1] = want; changed = true; }
+  } else {
+    insertBeforeOutput(out, '-ss', want);
+    changed = true;
+  }
+  if (getTimeFlags(out).tIdx !== -1) {
+    dropTimeFlag(out, '-t');
+    changed = true;
+  }
+  if (changed) corrections.push(`"first ${intent.raw}s" removed - keeping everything from ${want}s to the end`);
+  return { args: out, corrections };
+}
+
+// "seconds A to B" needs no duration: keep [A, B] via `-ss A -t (B-A)`.
+// Aggressive per the standing rule - any recognizable range request is
+// normalized to exactly those values.
+function fixupRangeTrim(args, instruction) {
+  const corrections = [];
+  if (!Array.isArray(args)) return { args, corrections };
+  const intent = parseTrimIntent(instruction);
+  if (intent.kind !== 'range') return { args, corrections };
+  const { a, b } = intent;
+  if (!(a >= 0) || !(b > a)) return { args, corrections };
+
+  const out = [...args];
+  const wantSs = fmtSec(a);
+  const wantT = fmtSec(b - a);
+  let changed = false;
+  const f = getTimeFlags(out);
+  if (f.ssIdx !== -1) {
+    if (!timesApprox(f.ssVal, a)) { out[f.ssIdx + 1] = wantSs; changed = true; }
+  } else {
+    insertBeforeOutput(out, '-ss', wantSs);
+    changed = true;
+  }
+  const g = getTimeFlags(out);
+  if (g.tIdx !== -1) {
+    if (!timesApprox(g.tVal, b - a)) { out[g.tIdx + 1] = wantT; changed = true; }
+  } else {
+    insertBeforeOutput(out, '-t', wantT);
+    changed = true;
+  }
+  if (changed) corrections.push(`"seconds ${intent.rawA}-${intent.rawB}" - keeping [${wantSs}s, ${fmtSec(b)}s]`);
+  return { args: out, corrections };
+}
+
 // Contradictions ffmpeg rejects outright (or that violate runner contracts):
 // two-pass flags (single-shot runner), audio-codec flags combined with -an,
 // and `-c:v copy` paired with video filters (filtering requires re-encoding).
@@ -584,6 +684,14 @@ function buildMiddleLine(instruction, duration) {
     `Use exactly -ss ${fmtSec((duration - intent.n) / 2)} -t ${fmtSec(intent.n)}, placed after -i.\n`;
 }
 
+function buildRangeLine(instruction) {
+  const intent = parseTrimIntent(instruction);
+  if (intent.kind !== 'range') return '';
+  if (!(intent.a >= 0) || !(intent.b > intent.a)) return '';
+  return `Range: keep seconds ${intent.rawA} to ${intent.rawB}. ` +
+    `Use exactly -ss ${fmtSec(intent.a)} -t ${fmtSec(intent.b - intent.a)}, placed after -i.\n`;
+}
+
 // Fixed translation order in one place (was chained by hand in main.js and
 // re-implemented by the smoke-test pipe helper): token fixes, input,
 // conflicts, output placeholder, trims, size cap.
@@ -596,6 +704,8 @@ function runTranslationPipeline(tokens, context) {
     (a) => ensureOutputFile(a, instruction),
     (a) => fixupLastTrim(a, instruction, duration),
     (a) => fixupMiddleTrim(a, instruction, duration),
+    (a) => fixupFirstTrim(a, instruction, duration),
+    (a) => fixupRangeTrim(a, instruction),
     (a) => fixupSizeLimit(a, instruction, duration),
   ];
   const corrections = [];
@@ -633,8 +743,11 @@ module.exports = {
   fixupSizeLimit,
   fixupLastTrim,
   fixupMiddleTrim,
+  fixupFirstTrim,
+  fixupRangeTrim,
   fixupConflicts,
   buildSizeLine,
   buildMiddleLine,
+  buildRangeLine,
   runTranslationPipeline,
 };

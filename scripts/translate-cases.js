@@ -138,6 +138,34 @@ const TRANSLATE_CASES = [
     modelRaw: '-i input.mp4 -c:v libx264 -movflags',
     expectedArgs: ['-i', '/v/clip.mp4', '-c:v', 'libx264', 'output.mp4'],
   },
+  {
+    name: 'first-keep strips -ss, holds -t',
+    instruction: 'keep the first 5 seconds',
+    duration: 30,
+    modelRaw: '-i input.mp4 -ss 3 -t 9 -c:v libx264 clip-out.mp4',
+    expectedArgs: ['-i', '/v/clip.mp4', '-t', '5', '-c:v', 'libx264', 'clip-out.mp4'],
+  },
+  {
+    name: 'first-remove keeps from N to the end',
+    instruction: 'remove the first 5 seconds',
+    duration: 30,
+    modelRaw: '-i input.mp4 -t 25 clip-out.mp4',
+    expectedArgs: ['-i', '/v/clip.mp4', '-ss', '5', 'clip-out.mp4'],
+  },
+  {
+    name: 'range normalizes window',
+    instruction: 'keep seconds 10 to 20',
+    duration: 60,
+    modelRaw: '-i input.mp4 -ss 0 -t 5 clip-out.mp4',
+    expectedArgs: ['-i', '/v/clip.mp4', '-ss', '10', '-t', '10', 'clip-out.mp4'],
+  },
+  {
+    name: 'honeyed request with thanks',
+    instruction: 'Hi there honey! Convert to mp4. Thank you!',
+    duration: 30,
+    modelRaw: 'Of course honey! Here you go:\n-i input.mp4 -c:v libx264 -c:a aac clip-out.mp4',
+    expectedArgs: ['-i', '/v/clip.mp4', '-c:v', 'libx264', '-c:a', 'aac', 'clip-out.mp4'],
+  },
 ];
 
 module.exports = { TRANSLATE_CASES };

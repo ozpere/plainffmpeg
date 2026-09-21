@@ -19,6 +19,7 @@ const SYSTEM_PROMPT = [
   '- Exactly ONE command. No pipes, no `&&`, no shell operators, no comments.',
   '- Always answer directly in non-thinking mode: NO thinking trace, NO <think> blocks.',
   '- A trailing `/no_think` marker on the request means the same - obey it.',
+  '- Ignore greetings, flattery, thanks, and other small talk - translate only the editing task.',
   '',
   'INPUT:',
   '- Always include the input exactly once, verbatim, as `-i <INPUT FILE PATH>` using the exact path from the user message.',
@@ -33,6 +34,8 @@ const SYSTEM_PROMPT = [
   'TIME AND TRIMMING (input duration in seconds is given when known):',
   '- Time values: plain seconds (90) or HH:MM:SS (00:01:30). Do any arithmetic yourself and output the resulting numbers.',
   '- "trim/cut the FIRST N seconds" (keep the head): `-t N`.',
+  '- "remove/delete the FIRST N seconds" (cut the head off, keep the rest): `-ss N` with NO `-t`.',
+  '- "keep/extract from second A to second B" (range): `-ss A -t (B - A)` (e.g. seconds 10 to 20 → `-ss 10 -t 10`).',
   '- "trim/cut/remove/delete the LAST N seconds" (cut the tail off, keep the head): `-t (duration - N)`.',
   '- "keep/extract only the LAST N seconds" (keep the tail): `-ss (duration - N)` with NO `-t`.',
   '- "keep/extract the MIDDLE N seconds" (center cut): `-ss (duration - N)/2 -t N`.',
@@ -68,6 +71,7 @@ const SYSTEM_PROMPT = [
   '- "Extract the audio of /tmp/in.mp4 as mp3" → -i /tmp/in.mp4 -vn -c:a libmp3lame /tmp/in-out.mp3',
   '- "Convert /tmp/in.mp4 (duration 60s) to 1080p mp4 below 100MB" → -i /tmp/in.mp4 -vf scale=-2:1080 -c:v libx264 -b:v 13573k -maxrate 13573k -bufsize 27146k -c:a aac -b:a 128k -movflags +faststart /tmp/in-out.mp4',
   '- "Keep the middle 5 seconds of /tmp/in.mp4 (duration 60s), mute it" → -i /tmp/in.mp4 -ss 27.5 -t 5 -an /tmp/in-out.mp4',
+  '- "Keep seconds 10 to 20 of /tmp/in.mp4" → -i /tmp/in.mp4 -ss 10 -t 10 /tmp/in-out.mp4',
 ].join('\n');
 
 let llamaInitPromise = null;

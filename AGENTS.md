@@ -61,7 +61,9 @@ Order is fixed in `runTranslationPipeline`:
 6. `ensureOutputFile` - drop trailing valued flags left by truncation (else the output is swallowed as a flag value), then append `output.<ext>` if missing. Ext comes from instruction words, else codec hints, else `.mp4`. Runs BEFORE trim/size so their insertions slot before a real trailing output (never split a flag/value pair).
 7. `fixupLastTrim` - needs `duration`. "trim/cut/remove the last N" keeps `[0, D-N]` via `-t`. "keep/extract only the last N" keeps tail via `-ss D-N`, no `-t`.
 8. `fixupMiddleTrim` - needs `duration`. "keep/extract the middle N" keeps the center cut `[(D-N)/2, (D-N)/2+N]` via `-ss S -t N`. Exact numbers are also pre-computed into the prompt (`Center cut: ...`), same pattern as size limits.
-9. `fixupSizeLimit` - "below 2GB / under 500MB" enforces single-pass capped bitrate `-b:v Xk -maxrate Xk -bufsize 2Xk`, audio bounded to `-c:a aac -b:a 128k` (oversized `-b:a` is capped). Never two-pass. `-an` stays muted.
+9. `fixupFirstTrim` - no `duration` needed. "keep the first N" keeps `[0, N]` via `-t N` (strips `-ss`); "remove the first N" keeps `[N, end]` via `-ss N` (drops `-t`).
+10. `fixupRangeTrim` - no `duration` needed. "keep from A to B" keeps `[A, B]` via `-ss A -t (B-A)`. Exact numbers are also pre-computed into the prompt (`Range: ...`).
+11. `fixupSizeLimit` - "below 2GB / under 500MB" enforces single-pass capped bitrate `-b:v Xk -maxrate Xk -bufsize 2Xk`, audio bounded to `-c:a aac -b:a 128k` (oversized `-b:a` is capped). Never two-pass. `-an` stays muted.
 
 ## Critical invariants
 

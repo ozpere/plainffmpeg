@@ -113,7 +113,9 @@ models/                GGUF weights live here (gitignored, never committed)
   a glance.
 - "Trim the last N seconds" means *cutting* those seconds off
   (`-t duration-N`); "keep the last N" keeps the tail; "keep the middle N"
-  keeps the center cut (`-ss (duration-N)/2 -t N`).
+  keeps the center cut (`-ss (duration-N)/2 -t N`); "keep the first N" keeps
+  the head (`-t N`), "remove the first N" cuts the head off (`-ss N`), and
+  "keep seconds A to B" keeps that window (`-ss A -t B-A`).
 - Size limits ("below 2GB") are enforced with single-pass capped
   bitrate computed from the probed duration - two-pass is never used.
 - Output extensions always follow the translated container, and the app

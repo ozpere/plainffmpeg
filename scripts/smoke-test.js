@@ -242,6 +242,47 @@ async function main() {
   assert.strictEqual(mainMod.buildSizeLine('convert to mp4', 60), '', 'no limit means no size line');
   assert.ok(mainMod.buildMiddleLine('keep the middle 5 seconds', 60).includes('-ss 27.5 -t 5'), 'middle builder must pre-compute the cut');
   assert.strictEqual(mainMod.buildMiddleLine('trim the last 5 seconds', 60), '', 'non-middle means no center line');
+  // first-N and range intents parse exactly once
+  assert.strictEqual(typeof mainMod.fixupFirstTrim, 'function');
+  assert.strictEqual(typeof mainMod.fixupRangeTrim, 'function');
+  assert.strictEqual(fixupsMod.fixupFirstTrim, mainMod.fixupFirstTrim, 'fixups must be the same functions main re-exports');
+  assert.strictEqual(fixupsMod.fixupRangeTrim, mainMod.fixupRangeTrim, 'fixups must be the same functions main re-exports');
+  assert.deepStrictEqual(mainMod.parseTrimIntent('keep the first 5 seconds'), { kind: 'first-keep', n: 5, raw: '5' });
+  assert.deepStrictEqual(mainMod.parseTrimIntent('remove the first 5 seconds'), { kind: 'first-remove', n: 5, raw: '5' });
+  assert.deepStrictEqual(mainMod.parseTrimIntent('keep seconds 10 to 20'), { kind: 'range', a: 10, b: 20, rawA: '10', rawB: '20' });
+  assert.deepStrictEqual(mainMod.parseTrimIntent('keep from 10 to 20'), { kind: 'range', a: 10, b: 20, rawA: '10', rawB: '20' });
+  assert.deepStrictEqual(mainMod.parseTrimIntent('convert 720 to 1080'), { kind: 'none', n: 0, raw: '' }, 'bare resolutions are not a range');
+  assert.ok(!mainMod.trimNeedsDuration('first-keep') && !mainMod.trimNeedsDuration('first-remove') && !mainMod.trimNeedsDuration('range'),
+    'head cuts and ranges resolve without a duration');
+  // first-keep holds [0, N]: strips -ss, ensures -t
+  let ft = mainMod.fixupFirstTrim(['-i', 'in.mp4', '-ss', '3', '-t', '9', 'out.mp4'], 'keep the first 5 seconds', 30);
+  assert.deepStrictEqual(ft.args, ['-i', 'in.mp4', '-t', '5', 'out.mp4']);
+  assert.strictEqual(ft.corrections.length, 1);
+  // first-keep inserts -t when missing, no duration needed
+  ft = mainMod.fixupFirstTrim(['-i', 'in.mp4', '-c:v', 'libx264', 'out.mp4'], 'keep the first 5 seconds', null);
+  assert.deepStrictEqual(ft.args, ['-i', 'in.mp4', '-c:v', 'libx264', '-t', '5', 'out.mp4']);
+  // first-remove holds [N, end]: ensures -ss, drops truncating -t
+  ft = mainMod.fixupFirstTrim(['-i', 'in.mp4', '-t', '25', 'out.mp4'], 'remove the first 5 seconds', 30);
+  assert.deepStrictEqual(ft.args, ['-i', 'in.mp4', '-ss', '5', 'out.mp4']);
+  // non-first and oversized N untouched
+  ft = mainMod.fixupFirstTrim(['-i', 'in.mp4', 'out.mp4'], 'trim the last 5 seconds', 30);
+  assert.deepStrictEqual(ft.args, ['-i', 'in.mp4', 'out.mp4']);
+  ft = mainMod.fixupFirstTrim(['-i', 'in.mp4', 'out.mp4'], 'remove the first 50 seconds', 30);
+  assert.deepStrictEqual(ft.args, ['-i', 'in.mp4', 'out.mp4']);
+  // range normalizes to -ss A -t (B-A)
+  let rg = mainMod.fixupRangeTrim(['-i', 'in.mp4', '-ss', '0', '-t', '5', 'out.mp4'], 'keep seconds 10 to 20');
+  assert.deepStrictEqual(rg.args, ['-i', 'in.mp4', '-ss', '10', '-t', '10', 'out.mp4']);
+  assert.strictEqual(rg.corrections.length, 1);
+  rg = mainMod.fixupRangeTrim(['-i', 'in.mp4', '-c:v', 'libx264', 'out.mp4'], 'keep from 10 to 20');
+  assert.deepStrictEqual(rg.args, ['-i', 'in.mp4', '-c:v', 'libx264', '-ss', '10', '-t', '10', 'out.mp4']);
+  rg = mainMod.fixupRangeTrim(['-i', 'in.mp4', '-ss', '10', '-t', '10', 'out.mp4'], 'keep seconds 10 to 20');
+  assert.deepStrictEqual(rg.args, ['-i', 'in.mp4', '-ss', '10', '-t', '10', 'out.mp4']);
+  assert.strictEqual(rg.corrections.length, 0, 'correct range untouched');
+  // range builder + prompt coverage
+  assert.ok(mainMod.buildRangeLine('keep seconds 10 to 20').includes('-ss 10 -t 10'), 'range builder must pre-compute the window');
+  assert.strictEqual(mainMod.buildRangeLine('convert to mp4'), '', 'non-range means no range line');
+  assert.ok(mainMod.SYSTEM_PROMPT.includes('small talk'), 'prompt must tell the model to ignore chit-chat');
+  assert.ok(mainMod.SYSTEM_PROMPT.includes('from second A'), 'prompt must teach ranges');
   // contradictions ffmpeg rejects: two-pass, -an with audio flags, copy with filters
   assert.strictEqual(typeof mainMod.fixupConflicts, 'function');
   let cf = mainMod.fixupConflicts(['-i', 'in.mp4', '-c:v', 'libx264', '-pass', '1', 'out.mp4']);
