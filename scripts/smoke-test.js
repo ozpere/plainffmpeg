@@ -219,6 +219,28 @@ async function main() {
   // the prompt must teach the center cut (functional users of it are below,
   // where mainSrc/renderer are in scope)
   assert.ok(mainMod.SYSTEM_PROMPT.includes('(duration - N)/2'), 'prompt must teach middle-N arithmetic');
+  // unified trim intent: exactly one kind per instruction (middle wins ties)
+  assert.strictEqual(typeof mainMod.parseTrimIntent, 'function');
+  assert.strictEqual(fixupsMod.parseTrimIntent, mainMod.parseTrimIntent, 'parser must be the same function main re-exports');
+  assert.deepStrictEqual(mainMod.parseTrimIntent('trim the last 5 seconds'), { kind: 'last-remove', n: 5, raw: '5' });
+  assert.deepStrictEqual(mainMod.parseTrimIntent('keep the last 5 seconds'), { kind: 'last-keep', n: 5, raw: '5' });
+  assert.deepStrictEqual(mainMod.parseTrimIntent('the last 5 seconds'), { kind: 'last-keep', n: 5, raw: '5' });
+  assert.deepStrictEqual(mainMod.parseTrimIntent('keep the middle 5 seconds'), { kind: 'middle', n: 5, raw: '5' });
+  assert.deepStrictEqual(mainMod.parseTrimIntent('keep the middle 5 seconds and trim the last 2 seconds'), { kind: 'middle', n: 5, raw: '5' });
+  assert.deepStrictEqual(mainMod.parseTrimIntent('convert to mp4'), { kind: 'none', n: 0, raw: '' });
+  assert.ok(mainMod.trimNeedsDuration('last-remove') && mainMod.trimNeedsDuration('last-keep') && mainMod.trimNeedsDuration('middle'));
+  assert.ok(!mainMod.trimNeedsDuration('none'), 'gateless kinds need no duration');
+  // shared arg helpers behave
+  const ib = ['-i', 'in.mp4', 'out.mkv'];
+  fixupsMod.insertBeforeOutput(ib, '-t', '5');
+  assert.deepStrictEqual(ib, ['-i', 'in.mp4', '-t', '5', 'out.mkv'], 'insertions slot before the output token');
+  assert.strictEqual(fixupsMod.timesApprox(5, 5.2), true, 'sub-second rounding tolerated');
+  assert.strictEqual(fixupsMod.timesApprox(5, 6), false);
+  // prompt-injection builders pre-compute exact numbers (or stay empty)
+  assert.ok(mainMod.buildSizeLine('convert to mp4 below 100MB', 60).includes('-b:v 13573k'), 'size builder must pre-compute the bitrate');
+  assert.strictEqual(mainMod.buildSizeLine('convert to mp4', 60), '', 'no limit means no size line');
+  assert.ok(mainMod.buildMiddleLine('keep the middle 5 seconds', 60).includes('-ss 27.5 -t 5'), 'middle builder must pre-compute the cut');
+  assert.strictEqual(mainMod.buildMiddleLine('trim the last 5 seconds', 60), '', 'non-middle means no center line');
   // contradictions ffmpeg rejects: two-pass, -an with audio flags, copy with filters
   assert.strictEqual(typeof mainMod.fixupConflicts, 'function');
   let cf = mainMod.fixupConflicts(['-i', 'in.mp4', '-c:v', 'libx264', '-pass', '1', 'out.mp4']);
@@ -236,15 +258,13 @@ async function main() {
   assert.strictEqual(cf.corrections.length, 0, 'sane commands untouched');
   // pipeline order: contradictions stripped and output ensured before any
   // insertion, so flag/value pairs stay adjacent (insertions slot before output)
-  const pipe = (a, instr, dur) => {
-    const s1 = mainMod.fixupArgs(a);
-    const s2 = mainMod.fixupInput(s1.args, '/v/clip.mp4');
-    const s3 = mainMod.fixupConflicts(s2.args, instr);
-    const s4 = mainMod.ensureOutputFile(s3.args, instr);
-    const s5 = mainMod.fixupLastTrim(s4.args, instr, dur);
-    const s6 = mainMod.fixupMiddleTrim(s5.args, instr, dur);
-    return mainMod.fixupSizeLimit(s6.args, instr, dur).args;
-  };
+  // The runner owns the fixed order - tests go through it so the order
+  // cannot drift from what the app actually runs.
+  assert.strictEqual(typeof mainMod.runTranslationPipeline, 'function');
+  assert.strictEqual(fixupsMod.runTranslationPipeline, mainMod.runTranslationPipeline, 'runner must be the same function main re-exports');
+  const pipe = (a, instr, dur) => mainMod.runTranslationPipeline(a, {
+    instruction: instr, inputFile: '/v/clip.mp4', duration: dur,
+  }).args;
   const pr = pipe(
     ['-i', '/v/clip.mp4', '-c:v', 'libvpx-vp9', '-an', '-c:a', 'libopus', '-pass', '1'],
     'convert to webm below 50MB and mute it', 60
@@ -325,7 +345,7 @@ async function main() {
   const html = fs.readFileSync(path.join(__dirname, '../src/renderer/index.html'), 'utf8');
   // center-cut numbers are pre-computed like size limits so the model applies
   // them verbatim; failures carry the raw output for the logs.
-  assert.ok(mainSrc.includes('Center cut: keep the middle'), 'translate must inject exact center-cut numbers');
+  assert.ok(mainSrc.includes('buildMiddleLine(instruction, duration)'), 'translate must inject exact center-cut numbers');
   assert.ok(mainSrc.includes('raw: rawOut'), 'failed translations must surface raw model output');
 
   // failure diagnostics: what the load depends on, in one pasteable object
@@ -569,6 +589,13 @@ async function main() {
   assert.ok(renderer.includes('Still reading the video file'), 'probe in flight must block time requests');
   assert.ok(renderer.includes('duration is unknown'), 'unknown duration must block time requests');
   assert.ok(renderer.includes('middle'), 'the duration gate must cover middle-N requests');
+  // gate parity: every trim kind that needs a duration must appear in the gate
+  for (const word of ['last', 'middle']) {
+    assert.ok(renderer.includes(word), `duration gate must cover ${word}-N requests`);
+  }
+  // probed dimensions travel to the translator for exact geometry math
+  assert.ok(renderer.includes('width: mediaWidth') && renderer.includes('height: mediaHeight'), 'translate must forward probed dimensions');
+  assert.ok(mainSrc.includes('Source resolution:'), 'prompt must carry source resolution');
   console.log('[smoke] model download UI OK');
 
   // windows packaging: thin installer (model fetched on first launch)

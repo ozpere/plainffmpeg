@@ -48,9 +48,9 @@ scripts/smoke-test.js    Headless contract, asserts behavior not just syntax
 models/                  Weights only (gitignored). Keep models/.gitkeep.
 ```
 
-## Translation pipeline (`src/fixups.js`, ordered by `handleTranslatePrompt` in `src/main.js`)
+## Translation pipeline (`src/fixups.js`, order fixed in `runTranslationPipeline`, called by `handleTranslatePrompt` in `src/main.js`)
 
-Order is fixed in `handleTranslatePrompt`:
+Order is fixed in `runTranslationPipeline`:
 
 1. `sanitizeModelOutput` - strip think traces/fences/backticks, rejoin lines, drop prose, require `-i`. Pure prose throws.
 2. `tokenizeArgs` - shell-aware split, preserves quotes.

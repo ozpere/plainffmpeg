@@ -22,6 +22,11 @@ const {
   parseSizeLimit,
   parseHMS,
   fmtSec,
+  parseTrimIntent,
+  trimNeedsDuration,
+  buildSizeLine,
+  buildMiddleLine,
+  runTranslationPipeline,
   quoteArgs,
   ffmpegFailureHint,
 } = require('./fixups');
@@ -338,34 +343,14 @@ function handleModelStatus() {
   };
 }
 
-async function handleTranslatePrompt({ instruction, inputFile, duration }) {
+async function handleTranslatePrompt({ instruction, inputFile, duration, width, height }) {
   const durLine = duration && duration > 0 ? `Input duration: ${duration} seconds.\n` : '';
-  // Size-limit math, done deterministically so the model only has to apply it:
-  // video bitrate that fits <limit> bytes into <duration> seconds.
-  let sizeLine = '';
-  const sizeBytes = parseSizeLimit(instruction);
-  if (sizeBytes && duration > 0) {
-    const audioBits = 128000;
-    const vk = Math.floor(Math.max(100000, Math.floor((sizeBytes * 8 * 0.98) / duration - audioBits)) / 1000);
-    sizeLine = `Size limit: ${(sizeBytes / 1024 ** 3 >= 1
-      ? `${+(sizeBytes / 1024 ** 3).toFixed(2)}GB`
-      : `${+(sizeBytes / 1024 ** 2).toFixed(1)}MB`)} max for this ${duration}s video. ` +
-      `Encode video at about ${vk}k: use exactly -b:v ${vk}k -maxrate ${vk}k -bufsize ${vk * 2}k, ` +
-      `audio -c:a aac -b:a 128k, single pass only.\n`;
-  }
-  // Center-cut math, done deterministically so the model only has to apply
-  // it (same pattern as the size limit): exact -ss/-t numbers for
-  // "keep the middle N seconds" of a D-second video.
-  let middleLine = '';
-  const middleM = /middle\s+(\d+(?:\.\d+)?)\s*s(?:ec(?:ond)?s?)?/i.exec(String(instruction || ''));
-  if (middleM && duration > 0) {
-    const middleN = parseFloat(middleM[1]);
-    if (middleN > 0 && middleN < duration) {
-      middleLine = `Center cut: keep the middle ${middleM[1]}s of this ${duration}s video. ` +
-        `Use exactly -ss ${fmtSec((duration - middleN) / 2)} -t ${fmtSec(middleN)}, placed after -i.\n`;
-    }
-  }
-  const userPrompt = `Input file: ${inputFile || 'input.mp4'}\n${durLine}${sizeLine}${middleLine}Task: ${instruction || ''}\nFFmpeg args:\n/no_think`;
+  const dimLine = (width > 0 && height > 0) ? `Source resolution: ${width}x${height}.\n` : '';
+  // Exact numbers are pre-computed by the deterministic builders so the
+  // model only has to apply them verbatim (see fixups.js).
+  const sizeLine = buildSizeLine(instruction, duration);
+  const middleLine = buildMiddleLine(instruction, duration);
+  const userPrompt = `Input file: ${inputFile || 'input.mp4'}\n${durLine}${dimLine}${sizeLine}${middleLine}Task: ${instruction || ''}\nFFmpeg args:\n/no_think`;
   // No silent fallback: any LLM problem is returned as an error so the UI
   // can alert the user instead of running a guessed-up command.
   let rawOut = '';
@@ -382,20 +367,8 @@ async function handleTranslatePrompt({ instruction, inputFile, duration }) {
     const cleaned = sanitizeModelOutput(raw);
     if (!cleaned) throw new Error('LLM returned empty output.');
     const tokens = tokenizeArgs(cleaned, inputFile);
-    const fixed = fixupArgs(tokens);
-    const withInput = fixupInput(fixed.args, inputFile);
-    const withConflicts = fixupConflicts(withInput.args, instruction);
-    // Output placeholder first: trim/size insertions slot in before the
-    // trailing output token, which keeps flag/value pairs adjacent.
-    const withOutput = ensureOutputFile(withConflicts.args, instruction);
-    const withTrim = fixupLastTrim(withOutput.args, instruction, duration);
-    const withMiddle = fixupMiddleTrim(withTrim.args, instruction, duration);
-    const withSize = fixupSizeLimit(withMiddle.args, instruction, duration);
-    const args = withSize.args;
-    const corrections = fixed.corrections.concat(
-      withInput.corrections, withConflicts.corrections, withOutput.corrections, withTrim.corrections,
-      withMiddle.corrections, withSize.corrections
-    );
+    // Fixed order lives in runTranslationPipeline (fixups.js).
+    const { args, corrections } = runTranslationPipeline(tokens, { instruction, inputFile, duration });
     return {
       ok: true,
       engine: 'node-llama-cpp',
@@ -671,6 +644,11 @@ module.exports = {
   fixupConflicts,
   ensureOutputFile,
   parseSizeLimit,
+  parseTrimIntent,
+  trimNeedsDuration,
+  buildSizeLine,
+  buildMiddleLine,
+  runTranslationPipeline,
   probeMedia,
   handleRunFfmpeg,
   enforceOutputExtension,

@@ -42,6 +42,8 @@
 
   let inputFile = null;
   let mediaDuration = null; // seconds, probed at load; resolves "last N seconds"
+  let mediaWidth = null; // probed pixels; forwarded so geometry math stays exact
+  let mediaHeight = null;
   let probing = false;     // probe in flight - duration not trustworthy yet
   let probeFailed = false; // probe settled without metadata
   let outputFile = null;   // explicit destination; null = use computed default
@@ -286,6 +288,8 @@
   function setFile(p) {
     inputFile = p;
     mediaDuration = null;
+    mediaWidth = null;
+    mediaHeight = null;
     probing = false;
     probeFailed = false;
     outputManual = false;
@@ -330,6 +334,8 @@
         probing = false;
         if (inputFile !== p || !meta) return;
         mediaDuration = meta.duration;
+        mediaWidth = meta.width || null;
+        mediaHeight = meta.height || null;
         if (!(mediaDuration > 0)) probeFailed = true;
         const bits = [];
         if (meta.duration) bits.push(meta.duration.toFixed(1) + 's');
@@ -454,7 +460,7 @@
     setStatus(translateStatus, 'st-active', 'Translating…');
     log(`translating: "${text}" …`);
     try {
-      const res = await window.api.translatePrompt({ instruction: text, inputFile, duration: mediaDuration });
+      const res = await window.api.translatePrompt({ instruction: text, inputFile, duration: mediaDuration, width: mediaWidth, height: mediaHeight });
       if (!res || res.ok === false) {
         // LLM failure: never execute anything.
         lastArgs = null;

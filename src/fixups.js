@@ -5,7 +5,7 @@
  * parsed args and returns { args, corrections } without throwing. They turn
  * common LLM mistakes into commands ffmpeg actually accepts, and every
  * rewrite is reported so the UI can log it. Order of application lives in
- * main.js handleTranslatePrompt and is fixed - do not reorder here.
+ * runTranslationPipeline below and is fixed - do not reorder the steps.
  */
 const fs = require('fs');
 
@@ -261,6 +261,56 @@ function fmtSec(sec) {
   return String(Math.round(sec * 100) / 100);
 }
 
+// Shared arg-list helpers: every insertion below slots new flags before the
+// trailing output token so flag/value pairs are never split apart.
+function insertBeforeOutput(out, ...tokens) {
+  const at = out.length > 0 && !String(out[out.length - 1]).startsWith('-') ? out.length - 1 : out.length;
+  out.splice(at, 0, ...tokens);
+  return at;
+}
+
+// Time comparisons tolerate sub-second model rounding (00:00:05 vs 5).
+function timesApprox(a, b, tol) {
+  return a !== null && b !== null && Math.abs(a - b) < (tol === undefined ? 0.51 : tol);
+}
+
+// Read the seek/duration flags as parsed numbers.
+function getTimeFlags(out) {
+  const ssIdx = out.findIndex((t) => t === '-ss');
+  const tIdx = out.findIndex((t) => t === '-t');
+  return {
+    ssIdx,
+    tIdx,
+    ssVal: ssIdx !== -1 ? parseTimeVal(out[ssIdx + 1]) : null,
+    tVal: tIdx !== -1 ? parseTimeVal(out[tIdx + 1]) : null,
+  };
+}
+
+// Set seek/duration values (formatted strings; null leaves that flag alone),
+// inserting missing flags before the output token.
+function setTimeFlags(out, ss, t) {
+  if (ss !== null && ss !== undefined) {
+    const f = getTimeFlags(out);
+    if (f.ssIdx !== -1) out[f.ssIdx + 1] = ss;
+    else insertBeforeOutput(out, '-ss', ss);
+  }
+  if (t !== null && t !== undefined) {
+    const f = getTimeFlags(out);
+    if (f.tIdx !== -1) out[f.tIdx + 1] = t;
+    else insertBeforeOutput(out, '-t', t);
+  }
+}
+
+// Drop a seek/duration flag with its value (a dangling valueless flag drops
+// alone so the output token is never eaten).
+function dropTimeFlag(out, flag) {
+  const i = out.findIndex((t) => t === flag);
+  if (i === -1) return false;
+  const nx = out[i + 1];
+  out.splice(i, (nx !== undefined && !String(nx).startsWith('-')) ? 2 : 1);
+  return true;
+}
+
 // File-size constraint in the instruction ("below 2GB", "under 500MB",
 // "2GB file size", "500MB max") → bytes. Returns null when absent.
 function parseSizeLimit(instruction) {
@@ -345,6 +395,38 @@ function fixupSizeLimit(args, instruction, durationSec) {
   return { args: out, corrections };
 }
 
+// Single source of truth for trim intent: exactly one kind per instruction,
+// so trim layers are mutually exclusive structurally. A "middle" request wins
+// over a "last" one when both appear (it runs later in the pipeline anyway).
+// Standing default preserved: bare "the last N s" with no verb keeps the tail.
+function parseTrimIntent(instruction) {
+  const instr = String(instruction || '');
+  const num = (re) => {
+    const m = re.exec(instr);
+    return m ? { n: parseFloat(m[1]), raw: m[1] } : null;
+  };
+  const SEC = '\\s*s(?:ec(?:ond)?s?)?';
+  const mid = num(new RegExp('middle\\s+(\\d+(?:\\.\\d+)?)' + SEC, 'i'));
+  if (mid && mid.n > 0) return { kind: 'middle', n: mid.n, raw: mid.raw };
+  const last = num(new RegExp('last\\s+(\\d+(?:\\.\\d+)?)' + SEC, 'i'));
+  if (last && last.n > 0) {
+    // Explicit keep-the-tail phrasing beats everything ("keep/extract/only the last N").
+    const keepTail = /\b(keep|keeping|extract|only|just)\b[\w\s]{0,12}\blast\s+\d/i.test(instr);
+    // Otherwise trim/cut/remove/delete/drop = cut those seconds off.
+    const removal = !keepTail
+      && /(remove|removing|delete|delet|trim|trimming|cut|cutting|drop|strip|without)/i.test(instr);
+    return { kind: removal ? 'last-remove' : 'last-keep', n: last.n, raw: last.raw };
+  }
+  return { kind: 'none', n: 0, raw: '' };
+}
+
+// Trim kinds that cannot be resolved without the probed duration. The renderer
+// duration gate duplicates this list (browser cannot require this module) -
+// a smoke test asserts the two stay in sync.
+function trimNeedsDuration(kind) {
+  return kind === 'last-remove' || kind === 'last-keep' || kind === 'middle';
+}
+
 // "last N seconds" needs the input duration to resolve. Removal phrasing
 // ("trim/cut/remove/delete the last N s") keeps [0, D-N]; anything else
 // ("keep/extract the last N s") keeps [D-N, end]. Rewrites only the
@@ -352,66 +434,50 @@ function fixupSizeLimit(args, instruction, durationSec) {
 function fixupLastTrim(args, instruction, durationSec) {
   const corrections = [];
   if (!durationSec || !(durationSec > 0) || !Array.isArray(args)) return { args, corrections };
-  const m = /last\s+(\d+(?:\.\d+)?)\s*s(?:ec(?:ond)?s?)?/i.exec(String(instruction || ''));
-  if (!m) return { args, corrections };
-  const N = parseFloat(m[1]);
+  const intent = parseTrimIntent(instruction);
+  if (intent.kind !== 'last-remove' && intent.kind !== 'last-keep') return { args, corrections };
+  const N = intent.n;
   if (!(N > 0) || N >= durationSec) return { args, corrections };
-  const instr = String(instruction || '');
-  // Explicit keep-the-tail phrasing beats everything ("keep/extract/only the last N").
-  const keepTail = /\b(keep|keeping|extract|only|just)\b[\w\s]{0,12}\blast\s+\d/i.test(instr);
-  // Otherwise trim/cut/remove/delete/drop = cut those seconds off.
-  const removal = !keepTail
-    && /(remove|removing|delete|delet|trim|trimming|cut|cutting|drop|strip|without)/i.test(instr);
 
   const out = [...args];
-  const ssIdx = out.findIndex((t) => t === '-ss');
-  const tIdx = out.findIndex((t) => t === '-t');
-  const ssVal = ssIdx !== -1 ? parseTimeVal(out[ssIdx + 1]) : null;
-  const tVal = tIdx !== -1 ? parseTimeVal(out[tIdx + 1]) : null;
-  const approx = (a, b) => a !== null && b !== null && Math.abs(a - b) < 0.51;
-  const startsAtZero = ssIdx === -1 || ssVal === null || ssVal < 0.51;
-
-  if (removal) {
+  if (intent.kind === 'last-remove') {
     // Keep [0, D-N]: strip any -ss, ensure -t D-N. A mid-file -ss would
     // contradict keeping the beginning, and -ss 0 is a no-op anyway.
     const want = fmtSec(durationSec - N);
     let changed = false;
-    let sIdx = out.findIndex((t) => t === '-ss');
-    if (sIdx !== -1) {
-      out.splice(sIdx, 2);
-      changed = true;
-    }
-    const ttIdx = out.findIndex((t) => t === '-t');
-    if (ttIdx !== -1) {
-      if (!approx(parseTimeVal(out[ttIdx + 1]), durationSec - N)) {
-        out[ttIdx + 1] = want;
+    if (dropTimeFlag(out, '-ss')) changed = true;
+    const f = getTimeFlags(out);
+    if (f.tIdx !== -1) {
+      if (!timesApprox(f.tVal, durationSec - N)) {
+        out[f.tIdx + 1] = want;
         changed = true;
       }
     } else {
-      const at = out.length > 0 && !String(out[out.length - 1]).startsWith('-') ? out.length - 1 : out.length;
-      out.splice(at, 0, '-t', want);
+      insertBeforeOutput(out, '-t', want);
       changed = true;
     }
-    if (changed) corrections.push(`"last ${m[1]}s" cut from ${fmtSec(durationSec)}s - keeping [0, ${want}s]`);
+    if (changed) corrections.push(`"last ${intent.raw}s" cut from ${fmtSec(durationSec)}s - keeping [0, ${want}s]`);
     return { args: out, corrections };
   }
 
   // Keep [D-N, end]: needs -ss D-N and no -t.
   const want = fmtSec(durationSec - N);
   const wantNum = durationSec - N;
-  if (ssIdx !== -1 && approx(ssVal, wantNum) && tIdx !== -1 && tVal !== null
-      && (ssVal + tVal) < durationSec - 0.51) {
+  const f = getTimeFlags(out);
+  const startsAtZero = f.ssIdx === -1 || f.ssVal === null || f.ssVal < 0.51;
+  if (f.ssIdx !== -1 && timesApprox(f.ssVal, wantNum) && f.tIdx !== -1 && f.tVal !== null
+      && (f.ssVal + f.tVal) < durationSec - 0.51) {
     // Right start, but -t truncates the kept tail - drop it, keep to the end.
-    out.splice(tIdx, 2);
-    corrections.push(`-t cut the kept "last ${m[1]}s" short - keeping everything from ${want}s to the end`);
-  } else if (ssIdx !== -1 && tIdx !== -1 && startsAtZero && approx(tVal, N)) {
-    out[ssIdx + 1] = want;
-    const tAt = out.findIndex((t) => t === '-t');
-    out.splice(tAt, 2);
-    corrections.push(`"last ${m[1]}s" of ${fmtSec(durationSec)}s starts at ${want}s - rewrote -ss/-t`);
-  } else if (ssIdx === -1 && tIdx !== -1 && approx(tVal, N)) {
-    out.splice(tIdx, 2, '-ss', want);
-    corrections.push(`"last ${m[1]}s" of ${fmtSec(durationSec)}s starts at ${want}s - replaced -t with -ss`);
+    dropTimeFlag(out, '-t');
+    corrections.push(`-t cut the kept "last ${intent.raw}s" short - keeping everything from ${want}s to the end`);
+  } else if (f.ssIdx !== -1 && f.tIdx !== -1 && startsAtZero && timesApprox(f.tVal, N)) {
+    out[f.ssIdx + 1] = want;
+    dropTimeFlag(out, '-t');
+    corrections.push(`"last ${intent.raw}s" of ${fmtSec(durationSec)}s starts at ${want}s - rewrote -ss/-t`);
+  } else if (f.ssIdx === -1 && f.tIdx !== -1 && timesApprox(f.tVal, N)) {
+    out[f.tIdx] = '-ss';
+    out[f.tIdx + 1] = want;
+    corrections.push(`"last ${intent.raw}s" of ${fmtSec(durationSec)}s starts at ${want}s - replaced -t with -ss`);
   }
   return { args: out, corrections };
 }
@@ -422,37 +488,24 @@ function fixupLastTrim(args, instruction, durationSec) {
 function fixupMiddleTrim(args, instruction, durationSec) {
   const corrections = [];
   if (!durationSec || !(durationSec > 0) || !Array.isArray(args)) return { args, corrections };
-  const m = /middle\s+(\d+(?:\.\d+)?)\s*s(?:ec(?:ond)?s?)?/i.exec(String(instruction || ''));
-  if (!m) return { args, corrections };
-  const N = parseFloat(m[1]);
+  const intent = parseTrimIntent(instruction);
+  if (intent.kind !== 'middle') return { args, corrections };
+  const N = intent.n;
   if (!(N > 0) || N >= durationSec) return { args, corrections };
   const wantSs = fmtSec((durationSec - N) / 2);
   const wantT = fmtSec(N);
-  const approx = (a, b) => a !== null && b !== null && Math.abs(a - b) < 0.51;
 
   const out = [...args];
-  const ssIdx = out.findIndex((t) => t === '-ss');
-  const tIdx = out.findIndex((t) => t === '-t');
-  const ssVal = ssIdx !== -1 ? parseTimeVal(out[ssIdx + 1]) : null;
-  const tVal = tIdx !== -1 ? parseTimeVal(out[tIdx + 1]) : null;
-  if (ssIdx !== -1 && tIdx !== -1
-      && approx(ssVal, (durationSec - N) / 2) && approx(tVal, N)) {
+  const f = getTimeFlags(out);
+  if (f.ssIdx !== -1 && f.tIdx !== -1
+      && timesApprox(f.ssVal, (durationSec - N) / 2) && timesApprox(f.tVal, N)) {
     return { args: out, corrections };
   }
-  if (ssIdx !== -1) out[ssIdx + 1] = wantSs;
-  else {
-    const at = out.length > 0 && !String(out[out.length - 1]).startsWith('-') ? out.length - 1 : out.length;
-    out.splice(at, 0, '-ss', wantSs);
-  }
-  const ttIdx = out.findIndex((t) => t === '-t');
-  if (ttIdx !== -1) out[ttIdx + 1] = wantT;
-  else {
-    const at = out.length > 0 && !String(out[out.length - 1]).startsWith('-') ? out.length - 1 : out.length;
-    out.splice(at, 0, '-t', wantT);
-  }
-  corrections.push(`"middle ${m[1]}s" of ${fmtSec(durationSec)}s - keeping [${wantSs}s, ${fmtSec((durationSec - N) / 2 + N)}s]`);
+  setTimeFlags(out, wantSs, wantT);
+  corrections.push(`"middle ${intent.raw}s" of ${fmtSec(durationSec)}s - keeping [${wantSs}s, ${fmtSec((durationSec - N) / 2 + N)}s]`);
   return { args: out, corrections };
 }
+
 // Contradictions ffmpeg rejects outright (or that violate runner contracts):
 // two-pass flags (single-shot runner), audio-codec flags combined with -an,
 // and `-c:v copy` paired with video filters (filtering requires re-encoding).
@@ -509,6 +562,52 @@ function fixupConflicts(args, instruction) {
   return { args: out, corrections };
 }
 
+// Prompt-injection builders: exact numbers pre-computed deterministically so
+// the model only has to apply them verbatim (was inline in main.js).
+function buildSizeLine(instruction, duration) {
+  const sizeBytes = parseSizeLimit(instruction);
+  if (!sizeBytes || !(duration > 0)) return '';
+  const audioBits = 128000;
+  const vk = Math.floor(Math.max(100000, Math.floor((sizeBytes * 8 * 0.98) / duration - audioBits)) / 1000);
+  return `Size limit: ${(sizeBytes / 1024 ** 3 >= 1
+    ? `${+(sizeBytes / 1024 ** 3).toFixed(2)}GB`
+    : `${+(sizeBytes / 1024 ** 2).toFixed(1)}MB`)} max for this ${duration}s video. ` +
+    `Encode video at about ${vk}k: use exactly -b:v ${vk}k -maxrate ${vk}k -bufsize ${vk * 2}k, ` +
+    `audio -c:a aac -b:a 128k, single pass only.\n`;
+}
+
+function buildMiddleLine(instruction, duration) {
+  const intent = parseTrimIntent(instruction);
+  if (intent.kind !== 'middle' || !(duration > 0)) return '';
+  if (!(intent.n > 0) || intent.n >= duration) return '';
+  return `Center cut: keep the middle ${intent.raw}s of this ${duration}s video. ` +
+    `Use exactly -ss ${fmtSec((duration - intent.n) / 2)} -t ${fmtSec(intent.n)}, placed after -i.\n`;
+}
+
+// Fixed translation order in one place (was chained by hand in main.js and
+// re-implemented by the smoke-test pipe helper): token fixes, input,
+// conflicts, output placeholder, trims, size cap.
+function runTranslationPipeline(tokens, context) {
+  const { instruction, inputFile, duration } = context || {};
+  const steps = [
+    (a) => fixupArgs(a),
+    (a) => fixupInput(a, inputFile),
+    (a) => fixupConflicts(a, instruction),
+    (a) => ensureOutputFile(a, instruction),
+    (a) => fixupLastTrim(a, instruction, duration),
+    (a) => fixupMiddleTrim(a, instruction, duration),
+    (a) => fixupSizeLimit(a, instruction, duration),
+  ];
+  const corrections = [];
+  let args = Array.isArray(tokens) ? [...tokens] : tokens;
+  for (const step of steps) {
+    const r = step(args);
+    args = r.args;
+    for (const c of r.corrections) corrections.push(c);
+  }
+  return { args, corrections };
+}
+
 module.exports = {
   sanitizeModelOutput,
   looksLikeFileToken,
@@ -522,10 +621,20 @@ module.exports = {
   ffmpegFailureHint,
   parseTimeVal,
   fmtSec,
+  insertBeforeOutput,
+  timesApprox,
+  getTimeFlags,
+  setTimeFlags,
+  dropTimeFlag,
+  parseTrimIntent,
+  trimNeedsDuration,
   parseSizeLimit,
   parseBitrateBps,
   fixupSizeLimit,
   fixupLastTrim,
   fixupMiddleTrim,
   fixupConflicts,
+  buildSizeLine,
+  buildMiddleLine,
+  runTranslationPipeline,
 };
