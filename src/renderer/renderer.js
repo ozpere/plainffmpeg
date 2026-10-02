@@ -223,7 +223,9 @@
   }
 
   function refreshRunEnabled() {
-    runBtn.disabled = !effectiveArgs();
+    // While FFmpeg runs the button is Stop and must stay clickable,
+    // whatever the box holds.
+    runBtn.disabled = ffmpegRunning ? false : !effectiveArgs();
   }
 
   function setBadge(state, text) {
@@ -352,8 +354,10 @@
     clearError();
     engineNote.textContent = '';
     if (cmdOut) cmdOut.value = '';
-    runBtn.disabled = true;
-    runBtn.textContent = RUN_LABEL;
+    if (!ffmpegRunning) {
+      runBtn.disabled = true;
+      runBtn.textContent = RUN_LABEL;
+    }
     setStatus(translateStatus, 'st-idle', 'Idle');
     setStatus(ffmpegStatus, 'st-idle', 'Idle');
     paintBar(barTranslate, 0);
@@ -507,8 +511,18 @@
     paintBar(barTranslate, null);
     setStatus(translateStatus, 'st-active', 'Translating…');
     log(`translating: "${text}" …`);
+    const translateFile = inputFile;
     try {
       const res = await window.api.translatePrompt({ instruction: text, inputFile, duration: mediaDuration, width: mediaWidth, height: mediaHeight });
+      if (inputFile !== translateFile) {
+        // Video switched mid-translation: the result names the old file.
+        // Drop it rather than running stale flags against the new video.
+        paintBar(barTranslate, 0);
+        setStatus(translateStatus, 'st-idle', 'Idle');
+        log('translation superseded by video switch - discarded.');
+        refreshRunEnabled();
+        return null;
+      }
       if (!res || res.ok === false) {
         // LLM failure: never execute the translation. Typed edits stay put -
         // they do not depend on the LLM and remain runnable.

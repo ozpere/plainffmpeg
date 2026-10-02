@@ -1399,6 +1399,8 @@ async function main() {
   assert.ok(!html.includes('stopBtn'), 'separate Stop button must be gone');
   assert.ok(renderer.includes('STOP_LABEL'), 'Run must morph into Stop while running');
   assert.ok(renderer.includes('ffmpegRunning'), 'morph clicks must route by run state');
+  assert.ok(renderer.includes('ffmpegRunning ? false'), 'Stop must stay clickable mid-run');
+  assert.ok(renderer.includes('inputFile !== translateFile'), 'late results for an old video must be discarded');
   assert.ok(renderer.includes('cancelFfmpeg'), 'morphed button must still reach cancel');
   console.log('[smoke] button order OK');
 
