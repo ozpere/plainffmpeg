@@ -14,7 +14,9 @@
   const translateBtn = $('translateBtn');
   const translateOnlyBtn = $('translateOnlyBtn');
   const runBtn = $('runBtn');
-  const stopBtn = $('stopBtn');
+  const RUN_LABEL = '▶ Run FFmpeg';
+  const STOP_LABEL = '■ Stop FFmpeg';
+  let ffmpegRunning = false;
   const cmdOut = $('cmdOut');
   const errorBanner = $('errorBanner');
   const engineNote = $('engineNote');
@@ -74,12 +76,12 @@
   function prettyLlmError(msg) {
     const m = String(msg || 'unknown error');
     if (/NoBinaryFoundError|ERR_DLOPEN_FAILED|specified module could not be found/i.test(m)) {
-      return 'Could not start the local AI engine - its native component failed to load. ' +
+      return 'Could not start the local LLM engine - its native component failed to load. ' +
         'On Windows this usually means the Microsoft Visual C++ Redistributable (x64) is missing: install it from https://aka.ms/vs/17/release/vc_redist.x64.exe, restart the app, then try again. ' +
         'The portable build does not install it for you. Full technical details are in the logs below.';
     }
     if (/model file not found/i.test(m)) {
-      return 'Model file not found. Press "Download AI model" above (one-time download), or run `npm run download-model` in dev, then try again.';
+      return 'Model file not found. Press "Download local LLM" above (one-time download), or run `npm run download-model` in dev, then try again.';
     }
     return m;
   }
@@ -353,7 +355,7 @@
     engineNote.textContent = '';
     if (cmdOut) cmdOut.value = '';
     runBtn.disabled = true;
-    if (stopBtn) stopBtn.disabled = true;
+    runBtn.textContent = RUN_LABEL;
     setStatus(translateStatus, 'st-idle', 'Idle');
     setStatus(ffmpegStatus, 'st-idle', 'Idle');
     paintBar(barTranslate, 0);
@@ -425,7 +427,7 @@
       const s = await window.api.modelStatus();
       if (!statusLogged) {
         statusLogged = true;
-        log(`AI model path: ${s.modelPath || '(unknown)'}${s.exists ? '' : ' (not downloaded yet)'}`);
+        log(`Local LLM path: ${s.modelPath || '(unknown)'}${s.exists ? '' : ' (not downloaded yet)'}`);
       }
       // Standing notice while a portable run uses a model outside its folder.
       // Two cases: the exe folder is not writable (app data is the only
@@ -435,9 +437,9 @@
       if (portableNote) {
         if (s.portable && s.fallbackToAppData) {
           if (s.portableWritable === false) {
-            portableNote.textContent = 'Portable note: the exe folder is not writable, so the AI model lives in Windows app data and survives deleting this folder. Path is logged below.';
+            portableNote.textContent = 'Portable note: the exe folder is not writable, so the local LLM lives in Windows app data and survives deleting this folder. Path is logged below.';
           } else {
-            portableNote.textContent = 'Portable note: using the AI model found in Windows app data. It stays there until you re-download next to the exe. Path is logged below.';
+            portableNote.textContent = 'Portable note: using the local LLM found in Windows app data. It stays there until you re-download next to the exe. Path is logged below.';
           }
           portableNote.classList.toggle('warn', s.portableWritable === false);
           portableNote.hidden = false;
@@ -591,10 +593,11 @@
     } catch (e) {
       log('overwrite check unavailable, continuing: ' + (e && e.message ? e.message : e));
     }
-    runBtn.disabled = true;
+    runBtn.disabled = false;
     translateBtn.disabled = true;
     translateOnlyBtn.disabled = true;
-    if (stopBtn) stopBtn.disabled = false;
+    ffmpegRunning = true;
+    runBtn.textContent = STOP_LABEL;
     paintBar(barFfmpeg, 0);
     setStatus(ffmpegStatus, 'st-active', 'Running…');
     log(`running ffmpeg → ${out}…`);
@@ -617,10 +620,22 @@
       log('ffmpeg failed: ' + (e && e.message ? e.message : e));
     } finally {
       // A video switched mid-run cleared the commands - do not re-enable then.
-      if (stopBtn) stopBtn.disabled = true;
+      ffmpegRunning = false;
+      runBtn.textContent = RUN_LABEL;
       refreshRunEnabled();
       translateBtn.disabled = false;
       translateOnlyBtn.disabled = false;
+    }
+  }
+
+  async function stopRun() {
+    try {
+      await window.api.cancelFfmpeg();
+      log('stop requested - finishing…');
+    } catch (e) {
+      // No label change: the run is either still stopping (its finally
+      // resets the button) or already over (nothing to stop).
+      log('stop unavailable: ' + (e && e.message ? e.message : e));
     }
   }
 
@@ -855,17 +870,9 @@
     const res = await translate();
     if (res) await run();
   });
-  runBtn.addEventListener('click', run);
-  if (stopBtn) stopBtn.addEventListener('click', async () => {
-    stopBtn.disabled = true;
-    try {
-      await window.api.cancelFfmpeg();
-      log('stop requested - finishing…');
-    } catch (e) {
-      // No re-enable: the run is either still stopping (its finally resets
-      // the buttons) or already over (nothing to stop).
-      log('stop unavailable: ' + (e && e.message ? e.message : e));
-    }
+  runBtn.addEventListener('click', () => {
+    if (ffmpegRunning) stopRun();
+    else run();
   });
 
   window.api.onLog((p) => { if (!p) return; log(p.line); });
@@ -902,7 +909,7 @@
     modelDlBarWrap.hidden = false;
     paintBar(barModel, 0);
     modelDlStatus.textContent = 'Starting download… (resumes if interrupted)';
-    log('downloading AI model (~1.3 GB, one-time)…');
+    log('downloading local LLM (~1.3 GB, one-time)…');
     const failDownload = (detail) => {
       modelDownloading = false;
       modelDlBtn.disabled = false;
@@ -916,7 +923,7 @@
         modelDlStatus.textContent = 'Waiting for confirmation…';
         const go = await confirmDialog({
           title: 'Store model in app data?',
-          message: 'The portable folder is not writable, so the ~1.3 GB AI model would be downloaded to Windows app data instead. Deleting the portable folder will not remove it. The exact path is logged below.',
+          message: 'The portable folder is not writable, so the ~1.3 GB local LLM would be downloaded to Windows app data instead. Deleting the portable folder will not remove it. The exact path is logged below.',
           okLabel: 'Download to app data',
         });
         if (!go) {

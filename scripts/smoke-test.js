@@ -860,6 +860,8 @@ async function main() {
   // in-app, never bundled)
   assert.ok(html.includes('id="modelDl"'), 'UI must have the first-launch download card');
   assert.ok(html.includes('id="modelDlBtn"'), 'UI must have the model download button');
+  assert.ok(html.includes('>Download local LLM<'), 'download button must read Download local LLM');
+  assert.ok(html.includes('Local LLM not downloaded yet'), 'download card must read Local LLM');
   assert.ok(html.includes('id="barModel"'), 'UI must have the model progress bar');
   assert.ok(renderer.includes('downloadModel'), 'renderer must wire the model download');
   assert.ok(renderer.includes('onModelDownload'), 'renderer must show download progress');
@@ -1010,7 +1012,7 @@ async function main() {
   // writable and an app-data model is simply being reused.
   assert.ok(mainSrc.includes('portableWritable'), 'model status must expose exe writability');
   assert.ok(renderer.includes('portableWritable'), 'notice must distinguish unwritable exe from reused app-data copy');
-  assert.ok(renderer.includes('using the AI model found in Windows app data'), 'reused app-data copy must say so');
+  assert.ok(renderer.includes('using the local LLM found in Windows app data'), 'reused app-data copy must say so');
   // instruction label + example copy, output folder shortcut
   assert.ok(html.includes('Instruction in plain English'), 'instruction label must stress plain English');
   assert.ok(html.includes('Convert to mp4,'), 'example copy must use mp4');
@@ -1033,7 +1035,7 @@ async function main() {
   assert.ok(installWin.includes('could not remove node_modules'), '--clean must report locked dirs instead of crashing');
   assert.ok(installWin.includes('vcruntime140_1.dll'), 'MSVC check must cover vcruntime140_1.dll');
   assert.ok(installWin.includes("SKIP_MODEL_DOWNLOAD: process.env.SKIP_MODEL_DOWNLOAD ?? '1'"), 'install must defer the model fetch by default');
-  assert.ok(renderer.includes('AI model path:'), 'resolved model path must be logged at boot');
+  assert.ok(renderer.includes('Local LLM path:'), 'resolved model path must be logged at boot');
   console.log('[smoke] packaging OK');
 
   // resumable downloader: seeded .part file must resume, not restart
@@ -1379,13 +1381,15 @@ async function main() {
   assert.strictEqual(llmSrc.split('from second A').length - 1, 1, 'range rule must be stated once');
   console.log('[smoke] system prompt OK');
 
-  // button order: Translate only | Translate & Run FFmpeg | Run FFmpeg
+  // button order: Translate only | Translate & Run FFmpeg | Run FFmpeg.
+  // No Stop button: Run morphs into Stop while FFmpeg runs.
   const order = ['translateOnlyBtn', 'translateBtn', 'runBtn'].map((id) => html.indexOf(`id="${id}"`));
   assert.ok(order.every((i) => i !== -1), 'all three action buttons must exist');
   assert.ok(order[0] < order[1] && order[1] < order[2], 'buttons must be ordered Translate only, Translate & Run, Run');
-  assert.ok(html.includes('id="stopBtn"'), 'UI must have the Stop button after Run');
-  assert.ok(html.indexOf('id="stopBtn"') > html.indexOf('id="runBtn"'), 'Stop must follow Run');
-  assert.ok(renderer.includes('cancelFfmpeg'), 'renderer must wire Stop to cancel');
+  assert.ok(!html.includes('stopBtn'), 'separate Stop button must be gone');
+  assert.ok(renderer.includes('STOP_LABEL'), 'Run must morph into Stop while running');
+  assert.ok(renderer.includes('ffmpegRunning'), 'morph clicks must route by run state');
+  assert.ok(renderer.includes('cancelFfmpeg'), 'morphed button must still reach cancel');
   console.log('[smoke] button order OK');
 
   // primary button glyph: monochrome mark, never the clashing color emoji

@@ -32,10 +32,10 @@
   <section id="modelDl" class="card model-dl" hidden>
     <div class="model-dl-row">
       <div class="model-dl-text">
-        <strong>AI model not downloaded yet</strong>
+        <strong>Local LLM not downloaded yet</strong>
         <span class="hint">One-time download (~1.3 GB). The app is fully offline after that.</span>
       </div>
-      <button id="modelDlBtn" type="button" class="primary">Download AI model</button>
+      <button id="modelDlBtn" type="button" class="primary">Download local LLM</button>
     </div>
     <div class="progress" id="modelDlBarWrap" role="progressbar" aria-label="Model download progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" hidden><div id="barModel"></div></div>
     <span id="modelDlStatus" class="progress-status" aria-live="polite"></span>
@@ -70,7 +70,6 @@
     <button id="translateOnlyBtn" type="button">Translate only</button>
     <button id="translateBtn" type="button" class="primary">✦ Translate &amp; Run FFmpeg</button>
     <button id="runBtn" type="button" disabled>▶ Run FFmpeg</button>
-    <button id="stopBtn" type="button" disabled>⊘ Stop</button>
   </section>
 
   <section>
