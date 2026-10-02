@@ -6,8 +6,7 @@
 const path = require('path');
 const fs = require('fs');
 
-// Local modules (pure moves out of this file - no behavior change):
-// fixups = deterministic translation pipeline, paths = on-disk locations,
+// Local modules: fixups = translation pipeline, paths = on-disk locations,
 // llm = local GGUF engine. This module keeps Electron, IPC, and orchestration.
 const {
   sanitizeModelOutput,
@@ -95,10 +94,8 @@ try {
   isElectron = !!(app && typeof app.whenReady === 'function' && process.versions && process.versions.electron);
 } catch { /* plain Node (smoke tests): helpers below still work */ }
 
-// Portable self-containment: a portable run keeps EVERYTHING next to the
-// exe (model, Electron profile, drop imports) so deleting the folder leaves
-// no trace. paths.js captured the real per-user data dir before this
-// redirect. Must run before app.ready.
+// Portable runs keep everything next to the exe, so deleting the folder
+// leaves no trace. Must run before app.ready.
 try {
   const base = portableDataDir();
   if (base && isElectron && app && typeof app.setPath === 'function') {
@@ -110,9 +107,8 @@ try {
 let ffmpegPath;
 try {
   const rawFfmpegPath = require('ffmpeg-static');
-  // Packaged apps extract the binary next to the asar (see build.asarUnpack),
-  // but child_process.spawn cannot execute inside an asar archive - rewrite.
-  // No-op in dev (no app.asar segment in the path).
+  // child_process.spawn cannot run inside an asar archive - rewrite to the
+  // unpacked copy. No-op in dev.
   ffmpegPath = String(rawFfmpegPath || '').replace('app.asar', 'app.asar.unpacked');
 } catch (e) {
   console.error('[main] ffmpeg-static not available:', e.message);
@@ -123,14 +119,6 @@ try {
 // Paths and model locations (see paths.js)
 // ---------------------------------------------------------------------------
 
-// (Moved to paths.js: resolveModelPath, userDataModelsDir, appDataModelsDir,
-// isPortableLaunch, portableFallbackActive, portableDataDir, dropsDir -
-// imported above and re-exported below to preserve the module contract.)
-
-// (Moved to llm.js: llama session state, isLlamaLoading, llamaDiagnostics,
-// llamaPrebuiltProbe, llamaDiagSummary, getLlamaSession - imported above and
-// re-exported below to preserve the module contract.)
-
 function notifyRenderer(line) {
   try {
     if (mainWindow && !mainWindow.isDestroyed()) {
@@ -139,21 +127,15 @@ function notifyRenderer(line) {
   } catch { /* window not ready yet */ }
 }
 
-// (Moved to llm.js and paths.js: llamaDiagnostics, existsSyncSafe,
-// MSVC_DLLS, MSVC_DOWNLOAD_URL, msvcRuntimeStatus, msvcMissingHint,
-// isMsvcMissingError, llamaPrebuiltProbe, llamaDiagSummary, getLlamaSession.)
-
-// First-launch model fetch (thin installer): resumable download into the
-// resolved model path with progress events to the renderer. Concurrent calls
-// share one flight. Errors are returned, never thrown to the UI as a crash.
+// First-launch model fetch: resumable download with progress events.
+// Concurrent calls share one flight; errors are returned, never thrown.
 let modelDownloadPromise = null;
 
 async function handleDownloadModel(event, payload) {
   if (modelDownloadPromise) return modelDownloadPromise;
   modelDownloadPromise = (async () => {
-    // Consent gate: a portable that cannot write next to its exe would store
-    // 1.3 GB in app data, where deleting the portable folder leaves it
-    // behind. That write needs explicit confirmation - refuse without it.
+    // Consent gate: an unwritable portable folder would strand 1.3 GB in app
+    // data. That write needs explicit confirmation - refuse without it.
     const consent = !!(payload && payload.consent);
     let dest = resolveModelPath();
     if (isPortableLaunch() && portableDataDir() === null) {
@@ -217,9 +199,8 @@ async function handleDownloadModel(event, payload) {
   }
 }
 
-// Fire-and-forget background preload at boot: the window is already up, so
-// the user can pick a video and type while the ~GB model loads underneath.
-// A translation requested mid-load simply awaits the same promise.
+// Background preload at boot: the window is already up, so a translation
+// requested mid-load simply awaits the same promise.
 function preloadLlm() {
   getLlamaSession().then(
     () => notifyRenderer('LLM ready in the background - translations start instantly.'),
@@ -237,10 +218,6 @@ function preloadLlm() {
     }
   );
 }
-
-// (Moved to fixups.js: sanitizeModelOutput, looksLikeFileToken,
-// ensureOutputFile, tokenizeArgs, P_HEIGHTS, fixupArgs, quoteArgs,
-// fixupInput - imported above and re-exported below.)
 
 // ---------------------------------------------------------------------------
 // Window
@@ -307,8 +284,7 @@ let modelStatCache = { at: 0, path: null, exists: false, size: 0 };
 
 function handleModelStatus() {
   const modelPath = resolveModelPath();
-  // The badge polls every few seconds; a stat per poll is cheap but
-  // pointless, so cache briefly. Reset on successful downloads below.
+  // The badge polls every few seconds - cache the stat briefly between polls.
   const now = Date.now();
   let exists = false;
   let size = 0;
@@ -355,9 +331,8 @@ function handleModelStatus() {
     ready,
     portable: isPortableLaunch(),
     fallbackToAppData: portableFallbackActive(),
-    // Null outside portable runs. False means the exe folder cannot take the
-    // 1.3 GB model, so app data is the only home; true means the exe folder
-    // is writable and an app-data model is simply being reused as-is.
+    // Null outside portable runs. False = exe folder unwritable, true =
+    // an app-data model is simply being reused.
     portableWritable: isPortableLaunch() ? portableDataDir() !== null : null,
   };
 }
@@ -462,8 +437,6 @@ async function handlePickFile() {
   return res.filePaths[0];
 }
 
-// (Moved to paths.js: defaultOutputPath - imported above and re-exported below.)
-
 async function handlePickOutput({ defaultPath, extension } = {}) {
   const filters = [{ name: 'Video', extensions: ['mp4', 'mkv', 'webm', 'mov', 'avi', 'm4v', 'gif', 'mp3'] }];
   // Put the translated container first: the save dialog auto-appends the
@@ -487,8 +460,7 @@ function handleOutputExists(outputPath) {
   }
 }
 
-// Reveal a directory in the OS file manager (the "Open folder" button).
-// The directory must exist - use the output's parent dir, not the file.
+// Reveal a directory in the OS file manager. Must be a dir, not the file.
 async function handleOpenPath({ dirPath } = {}) {
   const dir = String(dirPath || '');
   if (!dir) throw new Error('No folder to open yet.');
@@ -503,12 +475,10 @@ async function handleOpenPath({ dirPath } = {}) {
   return { ok: true, dir };
 }
 
-// Pathless drag import: when the OS exposes file bytes but no path,
-// the renderer sends the bytes and we materialize a temp copy.
+// Pathless drag import: the renderer sends bytes, we materialize a temp copy.
 async function handleSaveDroppedFile({ name, buffer } = {}) {
   if (!buffer || buffer.byteLength === 0) throw new Error('Empty dropped file.');
-  // Same 500 MB cap as the renderer's importPathlessDrop - direct IPC callers
-  // bypass the renderer check, so the main process enforces it too.
+  // Same 500 MB cap as the renderer - direct IPC callers bypass that check.
   const MAX_DROP_BYTES = 500 * 1024 * 1024;
   if (buffer.byteLength > MAX_DROP_BYTES) {
     throw new Error(`Dropped file too large (${(buffer.byteLength / 1048576).toFixed(0)} MB) - 500 MB max.`);
@@ -520,10 +490,6 @@ async function handleSaveDroppedFile({ name, buffer } = {}) {
   fs.writeFileSync(target, Buffer.from(buffer));
   return target;
 }
-
-// (Moved to paths.js: enforceOutputExtension. Moved to fixups.js: parseHMS,
-// ffmpegFailureHint, parseTimeVal, fmtSec, parseSizeLimit, parseBitrateBps,
-// fixupSizeLimit, fixupLastTrim, fixupConflicts - all imported above.)
 
 // Quick media probe via `ffmpeg -i` (no ffprobe dependency): duration,
 // resolution. Used to display file info and to resolve "last N seconds".
@@ -558,8 +524,8 @@ async function probeMedia(inputFile) {
   });
 }
 
-// Single run at a time (the UI locks while one runs): Stop kills it. The
-// close handler below turns the kill into a cancelled result, never a failure.
+// Single run at a time: Stop kills it, and the close handler below reports
+// the kill as cancelled, never failed.
 let runningProc = null;
 let runCancelled = false;
 

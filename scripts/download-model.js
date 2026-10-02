@@ -47,10 +47,8 @@ function fileHasMagic(filePath, magic) {
   return head.equals(want);
 }
 
-// Present model usable as-is, or null. A present-but-wrong file (HTML error
-// page, truncated junk) is removed so the download below heals it instead
-// of the skip gate trusting it forever. Candidates default to the real
-// locations; tests pass temp dirs so a real 1.3 GB model is never touched.
+// Present model usable as-is, or null. A present-but-wrong file is removed
+// so a bad download heals instead of passing the skip gate.
 function takeUsableModel(candidates = [TARGET, ALIAS]) {
   for (const p of candidates) {
     if (!exists(p)) continue;
@@ -75,7 +73,7 @@ async function downloadTo(url, dest, { onProgress, expectMagic, _retried } = {})
     // A partial from a DIFFERENT source must never be resumed: the origins
     // serve different bytes, so resuming splices a corrupt file.
     let owner = null;
-    try { owner = fs.readFileSync(sidecar, 'utf8'); } catch { /* legacy part - assume same source */ }
+    try { owner = fs.readFileSync(sidecar, 'utf8'); } catch { /* no sidecar - assume same source */ }
     if (owner !== null && owner !== url) {
       console.log('[download-model] partial file is from another source - restarting.');
       try { fs.rmSync(tmp, { force: true }); } catch { /* ignore */ }

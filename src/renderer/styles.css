@@ -186,9 +186,8 @@ button.primary:hover:not(:disabled) { background: #f0a83a; border-color: #f0a83a
 .progress-head { display: flex; align-items: baseline; justify-content: space-between; }
 .progress-head label { margin: 0; }
 .progress-status { font-size: 12px; font-weight: 600; color: var(--muted); font-variant-numeric: tabular-nums; }
-/* Step outcome states: color plus a monochrome mark so Done / Failed /
-   Cancelled read at a glance, not just as a word change. Icons come from
-   ::before so the text itself (and screen-reader announcements) stay plain. */
+/* Step outcomes: color plus a monochrome ::before mark, so screen readers
+   hear only the plain words. */
 .progress-status.st-idle { color: var(--muted); }
 .progress-status.st-idle::before { content: "○ "; }
 .progress-status.st-active { color: var(--accent); font-weight: 700; }

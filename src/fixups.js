@@ -47,11 +47,10 @@ function looksLikeFileToken(tok) {
   return /[/\\]/.test(t) || /\.[A-Za-z0-9]{2,4}["']?$/i.test(t);
 }
 
-// The model sometimes stops right before the output filename (trailing
-// flags like `-movflags +faststart` and EOS). Recover deterministically:
-// append `output.<ext>` with the container derived from the instruction
-// (else codec hints, else .mp4). The runner swaps in the real destination
-// path at run time; only the extension matters downstream.
+// The model sometimes stops right before the output filename. Recover
+// deterministically: append output.<ext> (container from instruction words,
+// else codec hints, else .mp4). The runner swaps in the real destination;
+// only the extension matters downstream.
 function ensureOutputFile(args, instruction) {
   const corrections = [];
   if (!Array.isArray(args) || args.length === 0) return { args, corrections };
@@ -204,10 +203,9 @@ function quoteArgs(args) {
   return args.map((a) => (/\s/.test(a) ? `"${a}"` : a)).join(' ');
 }
 
-// The model sometimes echoes the prompt's placeholder (`-i input.mp4`)
-// instead of the real selected file. Since the input always comes from the
-// loaded video, rewrite a missing/placeholder/nonexistent -i value with it.
-// Returns { args, corrections } - never throws.
+// The model sometimes echoes the prompt placeholder (`-i input.mp4`). The
+// input always comes from the loaded video, so rewrite a missing or fake
+// -i value with it. Returns { args, corrections } - never throws.
 function fixupInput(args, inputFile) {
   const corrections = [];
   if (!inputFile || !Array.isArray(args)) return { args, corrections };
@@ -393,10 +391,9 @@ function parseBitrateBps(v) {
   return Math.floor(parseFloat(m[1]) * scale);
 }
 
-// Single-pass size cap: video bitrate from (bytes*8*margin/duration - audio).
-// Replaces/derives -b:v/-maxrate/-bufsize and bounds copied audio, because a
-// limit is a guarantee, not a suggestion. Our runner executes ONE ffmpeg
-// command, so two-pass (-pass 1/2) is never an option.
+// Single-pass size cap: budget (bytes*8*margin/duration - audio) into
+// -b:v/-maxrate/-bufsize, and bound copied audio. One command only, so
+// two-pass is never an option.
 function fixupSizeLimit(args, instruction, durationSec) {
   const corrections = [];
   if (!Array.isArray(args)) return { args, corrections };
@@ -457,12 +454,9 @@ function fixupSizeLimit(args, instruction, durationSec) {
   return { args: out, corrections };
 }
 
-// Single source of truth for trim intent: exactly one kind per instruction,
-// so trim layers are mutually exclusive structurally. Priority: middle, then
-// last, then first, then range (a pathological multi-trim instruction gets
-// the most specific match). Standing default preserved: bare "the last N s"
-// with no verb keeps the tail. Single-N kinds return {kind, n, raw}; range
-// returns {kind, a, b, rawA, rawB} (kept seconds [a, b]).
+// Single source of truth for trim intent: exactly one kind per instruction
+// (middle wins ties; bare "the last N s" keeps the tail). Range returns
+// {kind, a, b, rawA, rawB} (kept seconds [a, b]).
 function parseTrimIntent(instruction) {
   const instr = String(instruction || '');
   const num = (re) => {
@@ -628,8 +622,8 @@ function fixupFirstTrim(args, instruction, durationSec) {
 }
 
 // "seconds A to B" needs no duration: keep [A, B] via `-ss A -t (B-A)`.
-// Aggressive per the standing rule - any recognizable range request is
-// normalized to exactly those values.
+// Aggressive normalization: any recognizable range request becomes
+// exactly those values.
 function fixupRangeTrim(args, instruction) {
   const corrections = [];
   if (!Array.isArray(args)) return { args, corrections };
@@ -660,11 +654,9 @@ function fixupRangeTrim(args, instruction) {
   return { args: out, corrections };
 }
 
-// Provable no-op seeks with no trim intent behind them: `-ss 0` seeks
-// nowhere, and `-t <full duration>` at 1x speed caps nothing. Both are model
-// noise - except under a speed change, where `-t` truncates the stretched
-// output, so a non-1x factor keeps it. Runs after the trim layers (they own
-// intentional windows) and before the thumbnail (which owns its own `-ss`).
+// No-op seeks with no trim intent: drop `-ss 0` always; drop `-t` at full
+// duration only at 1x speed (under speed changes it truncates the stretched
+// output). Runs after the trims, before the thumbnail.
 function fixupNoopSeek(args, instruction, durationSec) {
   const corrections = [];
   if (!Array.isArray(args)) return { args, corrections };
@@ -691,10 +683,8 @@ function fixupNoopSeek(args, instruction, durationSec) {
 // Contradictions ffmpeg rejects outright (or that violate runner contracts):
 // two-pass flags (single-shot runner), audio-codec flags combined with -an,
 // and `-c:v copy` paired with video filters (filtering requires re-encoding).
-// Runs BEFORE size-limit insertions so flag/value pairs are still adjacent
-// (inserting between `-pass` and `1` would orphan the value). The container
-// for the stream-copy fix comes from the instruction words, mirroring
-// ensureOutputFile (whose .mp4 default matches the libx264 default here).
+// Runs before size-limit insertions (flag/value pairs must stay adjacent).
+// The container comes from the instruction words, mirroring ensureOutputFile.
 // Returns { args, corrections } - never throws.
 function fixupConflicts(args, instruction) {
   const corrections = [];
@@ -783,10 +773,9 @@ function atempoChain(x) {
   return parts.map((p) => `atempo=${p}`).join(',');
 }
 
-// Speed change: video via setpts, audio matched via atempo so A/V stay in
-// sync (a lone setpts silences nothing but desyncs everything). The factor
-// comes from the instruction when explicit, else from the model's own setpts
-// (then only the audio side is derived). Muted output needs no audio side.
+// Speed change: video via setpts, audio matched via atempo (a lone setpts
+// desyncs). Factor from the instruction when explicit, else the model's own
+// setpts. Muted output needs no audio side.
 function fixupSpeed(args, instruction) {
   const corrections = [];
   if (!Array.isArray(args)) return { args, corrections };
@@ -942,9 +931,7 @@ function fixupRotate(args, instruction) {
 }
 
 // Volume factor from the instruction ("boost volume", "half volume",
-// "150%"): bare louder/quieter need no volume word, vaguer verbs do.
-// Returns null when no volume intent is recognizable. Mute stays on the
-// -an path (the model emits it, conflicts enforces it).
+// "150%"). Mute stays on the -an path. Null when unrecognizable.
 function parseVolume(instruction) {
   const instr = String(instruction || '');
   const pct = /(?:volume\s*)?(\d+(?:\.\d+)?)\s*%/i.exec(instr);
@@ -1019,10 +1006,9 @@ function fixupGif(args, instruction) {
   return { args: out, corrections };
 }
 
-// Thumbnail / poster frame: a single frame as a still image. Owns seeking
-// only when no trim intent is present (a trim owns -ss/-t then); always owns
-// the frame count, the image container, and the bitrate flags (a still has
-// no bitrate). Time defaults to the middle with a known duration, else 0.
+// Thumbnail: one frame as a still image. Owns seeking only with no trim
+// intent (a trim owns -ss/-t then); always owns frame count, container,
+// and bitrate. Time defaults to the middle with a known duration, else 0.
 function parseThumbTime(instruction, duration) {
   const instr = String(instruction || '');
   const at = /at\s+(\d+(?::\d+){0,2}(?:\.\d+)?)/i.exec(instr);
@@ -1082,8 +1068,8 @@ function fixupThumbnail(args, instruction, duration) {
   return { args: out, corrections };
 }
 
-// Prompt-injection builders: exact numbers pre-computed deterministically so
-// the model only has to apply them verbatim (was inline in main.js).
+// Prompt builders: exact numbers pre-computed deterministically so the
+// model only has to apply them verbatim.
 function buildSizeLine(instruction, duration) {
   const sizeBytes = parseSizeLimit(instruction);
   if (!sizeBytes || !(duration > 0)) return '';
@@ -1121,11 +1107,9 @@ function buildSpeedLine(instruction) {
     `Use exactly -vf setpts=${fmtTempo(1 / x)}*PTS -af ${atempoChain(x)}.\n`;
 }
 
-// Fixed translation order in one place (was chained by hand in main.js and
-// re-implemented by the smoke-test pipe helper): token fixes, filter
-// construction (so fixupConflicts below sees every filter), input,
-// conflicts, output placeholder, trims, size cap, thumbnail last (it owns
-// the frame count, container, and bitrate flags of a still).
+// Fixed translation order in one place: token fixes, filter construction
+// (so fixupConflicts sees every filter), input, conflicts, output
+// placeholder, trims, size cap, thumbnail last.
 function runTranslationPipeline(tokens, context) {
   const { instruction, inputFile, duration } = context || {};
   const steps = [

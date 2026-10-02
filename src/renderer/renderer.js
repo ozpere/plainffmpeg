@@ -142,7 +142,7 @@
 
   function refreshOutputDisplay() {
     let shown = outputManual && outputFile ? outputFile : defaultOutput();
-    // The translated command dictates the container extension - a manual
+    // The effective command dictates the container extension - a manual
     // `output.mp4` for an mkv command is coerced to .mkv.
     const coerced = coerceExt(shown);
     if (coerced !== shown) {
@@ -234,10 +234,8 @@
     engineBadge.classList.toggle('error', state === 'error');
   }
 
-  // Step statuses carry color + icon through classes so the copy itself
-  // stays exactly 'Idle' / 'Translating…' / 'Running…' / 'Done' / 'Failed'
-  // / 'Cancelled' (plus 'N%' / 'Failed (code N)' live progress). Icons come
-  // from CSS ::before so screen readers hear only the words.
+  // Step statuses keep exact copy; color and icon come from classes, so
+  // screen readers hear only the words.
   const STATUS_CLASSES = ['st-idle', 'st-active', 'st-done', 'st-failed', 'st-cancelled'];
   function setStatus(el, state, text) {
     el.textContent = text;
@@ -406,10 +404,8 @@
     );
   }
 
-  // Polls until the background LLM load finishes: the badge goes
-  // unavailable → loading (red) → ready (green) without blocking the UI.
-  // With no model on disk the download card shows.
-  // The resolved model path is logged once so "where is my 1.3 GB" is answerable.
+  // Badge polls the background LLM load without blocking the UI.
+  // The resolved model path is logged once.
   let statusLogged = false;
   // Single status loop: every schedule cancels the pending poll first, so
   // the download-complete nudge cannot fork a second chain.
@@ -429,11 +425,8 @@
         statusLogged = true;
         log(`Local LLM path: ${s.modelPath || '(unknown)'}${s.exists ? '' : ' (not downloaded yet)'}`);
       }
-      // Standing notice while a portable run uses a model outside its folder.
-      // Two cases: the exe folder is not writable (app data is the only
-      // home), or the exe folder is writable but the model was already found
-      // in app data (installed copy, earlier unwritable run) and is reused
-      // as-is. Only the first case may claim the folder is not writable.
+      // Standing notice while a portable run uses a model outside its
+      // folder. Only the unwritable-exe case may blame the folder.
       if (portableNote) {
         if (s.portable && s.fallbackToAppData) {
           if (s.portableWritable === false) {
@@ -771,8 +764,8 @@
     if (files.length > 0) {
       log(`drop received: ${files[0] && files[0].name ? files[0].name : '(unnamed file)'}`);
     }
-    // File.path is deprecated and arrives empty on modern Electron - resolve
-    // the native path via the preload relay before anything else textual.
+    // No path on the File? Resolve the native path via the preload
+    // relay before anything else textual.
     if (files.length > 0 && files[0]) {
       let native = '';
       try {

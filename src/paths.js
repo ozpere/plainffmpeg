@@ -20,8 +20,7 @@ try {
 } catch { /* plain Node (smoke tests) */ }
 
 // Real per-user data dir, captured before main.js redirects the Electron
-// profile exe-side for portable runs - the portable "last fallback" and the
-// fallback notice must keep pointing at the genuine app-data location.
+// profile exe-side for portable runs.
 let defaultUserDataDir = null;
 try {
   if (isElectron && app && typeof app.getPath === 'function') {
@@ -42,19 +41,15 @@ function resolveModelPath() {
   ];
   const dirs = [];
   if (isPortableLaunch()) {
-    // Portable flow, deliberately short: exe-side home, then app data as the
-    // LAST fallback (nothing after it - data must never hide in dev dirs).
-    // Reads use existence (a copy on read-only media still counts); only a
-    // NEW download needs a writable home (see portableDataDir + the consent
-    // gate in handleDownloadModel).
+    // Exe-side home first, app data last and nothing after it. Reads use
+    // existence; only a new download needs a writable home.
     const exeModels = path.join(process.env.PORTABLE_EXECUTABLE_DIR, 'PlainFFmpegData', 'models');
     dirs.push(exeModels);
     const appData = appDataModelsDir();
     if (appData && !dirs.includes(appData)) dirs.push(appData);
   } else {
-    // Preferred write target first (exe-side for portable, else app data),
-    // then every location an existing download could already live in - an
-    // older copy keeps working instead of triggering a re-download.
+    // Preferred write target first, then every dir an existing download
+    // could already live in.
     const preferred = userDataModelsDir();
     if (preferred) dirs.push(preferred);
     const appData = appDataModelsDir();
@@ -79,11 +74,8 @@ function resolveModelPath() {
   return path.join(dirs[0], names[0]);
 }
 
-// Writable per-user models dir.
-// Portable builds prefer a folder next to the exe (deleting the folder then
-// removes the 1.3 GB download too - a portable app should leave no trace).
-// Installed copies use the per-user app data dir. Falls back to app data when
-// the exe dir is missing or read-only. Null in plain Node (smoke tests).
+// Writable per-user models dir: exe-side for portable runs (deleting the
+// folder removes the download too), else app data. Null in plain Node.
 function userDataModelsDir() {
   const portableBase = portableDataDir();
   if (portableBase) return path.join(portableBase, 'models');
@@ -91,8 +83,7 @@ function userDataModelsDir() {
 }
 
 // Per-user app data models dir (null in plain Node). Uses the data dir
-// captured before the portable redirect, so the portable "last fallback"
-// and the fallback notice keep pointing at the real app-data location.
+// captured before the portable redirect above.
 function appDataModelsDir() {
   try {
     if (defaultUserDataDir) return path.join(defaultUserDataDir, 'models');
@@ -117,9 +108,8 @@ function portableFallbackActive() {
   return resolveModelPath().startsWith(appData + path.sep);
 }
 
-// Exe-side data dir for portable launches (set by the portable launcher), or
-// null when it cannot be used. Never creates anything - the downloader makes
-// the dir when a download actually starts.
+// Exe-side data dir for portable launches, or null when unusable. Creates
+// nothing - the downloader makes the dir when a download actually starts.
 function portableDataDir() {
   try {
     const exeDir = process.env.PORTABLE_EXECUTABLE_DIR;
@@ -146,10 +136,8 @@ function existsSyncSafe(p) {
 }
 
 // MSVC runtime DLLs the node-llama-cpp prebuilt binary needs on Windows.
-// The NSIS installer installs them silently (assets/vc-redist.nsh); the
-// portable build cannot, so stock Windows fails with NoBinaryFoundError /
-// ERR_DLOPEN_FAILED. Detect it so the UI can name the real cause instead
-// of "not loaded yet".
+// The installer puts them there silently; the portable build cannot, so
+// detect the absence and name the real cause instead of "not loaded yet".
 const MSVC_DLLS = ['vcruntime140.dll', 'vcruntime140_1.dll', 'msvcp140.dll'];
 const MSVC_DOWNLOAD_URL = 'https://aka.ms/vs/17/release/vc_redist.x64.exe';
 

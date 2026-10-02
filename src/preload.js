@@ -7,11 +7,8 @@ contextBridge.exposeInMainWorld('api', {
   pickOutput: (payload) => ipcRenderer.invoke('pick-output', payload),
   outputExists: (outputPath) => ipcRenderer.invoke('output-exists', outputPath),
   saveDroppedFile: (name, buffer) => ipcRenderer.invoke('save-dropped-file', { name, buffer }),
-  // Native drop path: File.path is deprecated and arrives empty on modern
-  // Electron, so resolve it here via webUtils (preload-direct, no IPC).
-  // Returns '' for content with no file on disk. The renderer already
-  // handles full paths (the file picker returns them), so exposing the
-  // resolved drop path changes nothing about trust.
+  // Native drop path: resolves the real file for a drop via webUtils.
+  // Preload-direct (no IPC): returns '' for content with no file on disk.
   getDroppedPath: async (file) => {
     try {
       return webUtils && typeof webUtils.getPathForFile === 'function'

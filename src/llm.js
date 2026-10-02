@@ -106,8 +106,7 @@ function getLlamaLoadError() {
   return llamaLoadError;
 }
 
-// Snapshot of everything the LLM load depends on: runtime ABIs, model file,
-// and the on-disk native binary packages. Never throws - meant to turn
+// Snapshot of everything the LLM load depends on. Never throws - turns
 // "it doesn't load" into a pasteable answer.
 async function llamaDiagnostics() {
   const d = { ok: !!llamaSession };
@@ -140,10 +139,8 @@ async function llamaDiagnostics() {
   return d;
 }
 
-// Replicates the loader's own lookup step by step: dynamic-import the
-// platform bins package, read getBinsDir(), and check the binding binary in
-// both the asar and the unpacked location. Whatever link breaks in a
-// packaged app shows up here as false.
+// Replays the loader lookup: import the platform bins package, read the
+// bins dir, and check the binding binary in both asar locations.
 async function llamaPrebuiltProbe() {
   const out = { importOk: false };
   try {
@@ -204,9 +201,8 @@ async function getLlamaSession() {
         `Model file not found at ${modelPath}. Run "npm run download-model" first.`
       );
     }
-    // node-llama-cpp v3 is pure ESM ("type": "module"), so it cannot be
-    // require()d from this CommonJS main process - dynamic import() works
-    // everywhere, including inside Electron's main process.
+    // node-llama-cpp v3 is pure ESM, so this CommonJS process loads it
+    // via dynamic import() (require() throws ERR_REQUIRE_ESM).
     const { getLlama, LlamaChatSession } = await import('node-llama-cpp');
     const llama = await getLlama();
     llamaModel = await llama.loadModel({ modelPath });
