@@ -98,7 +98,7 @@ Order is fixed in `runTranslationPipeline`:
 
 - House style: short hyphen `-` only. Do not introduce U+2014 in source, styles, or UI copy.
 - No `linear-gradient`, no glow, no purple/indigo (`#6c8cff #9d7bff #4a6cf7 #8b5cf6`), no `text-transform: uppercase`. Pastel badges: loading `#f2b8b0`, ready `#bfe3b8`, error `#f2b8b0`. Centered `.btn-row`, preview capped at `max-height: 320px`, sticky titlebar.
-- Button order in `index.html`: `translateOnlyBtn`, `translateBtn` (`✦ Translate & Run FFmpeg`, monochrome glyph, never color emoji), `runBtn`.
+- Button order in `index.html`: `translateOnlyBtn`, `translateBtn` (`✦ Translate & Run FFmpeg`, monochrome glyph, never color emoji), `runBtn` (`▶ Run FFmpeg` morphs into `■ Stop FFmpeg` while a run is active - there is deliberately no separate stop button).
 - Copy: title `PlainFFmpeg`, subtitle stresses `100% offline`, statuses capitalized (`Translating...`, `Running...`, `Failed`, `Done`, `Cancelled`, `Idle`), badge prefix `Engine: ...`.
 
 ## Windows and install quirks
