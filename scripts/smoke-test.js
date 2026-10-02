@@ -699,17 +699,25 @@ async function main() {
   assert.ok(renderer.includes('errorBanner'), 'renderer must surface LLM errors, not fallback');
   console.log('[smoke] IPC surface OK');
 
-  // output destination: default is output.<ext> next to the input
+  // output destination: default is <name>-out.<ext> next to the input
   assert.strictEqual(typeof mainMod.defaultOutputPath, 'function');
   assert.strictEqual(
     mainMod.defaultOutputPath('/vids/clip.mp4', ['-y', '-i', '/vids/clip.mp4', 'out.mkv']),
-    path.join('/vids', 'output.mkv')
+    path.join('/vids', 'clip-out.mkv')
   );
   assert.strictEqual(
     mainMod.defaultOutputPath('/vids/clip.mp4', ['-y', '-i', '/vids/clip.mp4']),
-    path.join('/vids', 'output.ext'),
-    'pre-translation default must be output.ext, never a guessed container'
+    path.join('/vids', 'clip-out.ext'),
+    'pre-translation default must be <name>-out.ext, never a guessed container'
   );
+  assert.strictEqual(
+    mainMod.defaultOutputPath('/vids/noext', ['-y', '-i', '/vids/noext']),
+    path.join('/vids', 'noext-out.ext'),
+    'extensionless input keeps its name'
+  );
+  // renderer parity: the browser mirror must derive the same -out default.
+  assert.ok(renderer.includes('inputStem(inputFile)'), 'renderer default must stem from the input name');
+  assert.ok(html.includes('<name>-out.ext'), 'output placeholder must show the -out default');
   // extension enforcement: manual name yields to the translated container
   assert.strictEqual(typeof mainMod.enforceOutputExtension, 'function');
   let e = mainMod.enforceOutputExtension('/v/output.mp4', ['-i', 'in.mp4', 'out.mkv']);

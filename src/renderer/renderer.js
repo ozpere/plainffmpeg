@@ -113,9 +113,9 @@
     return dir + (dir.endsWith('/') || dir.endsWith('\\') ? '' : sep) + file;
   }
 
-  // Default output: same directory as the input, named `output.<ext>`.
+  // Default output: same directory as the input, named `<name>-out.<ext>`.
   // <ext> comes from the effective command (box edits or translation);
-  // until either exists it is literally `output.ext` - never guessed.
+  // until either exists it is literally `<name>-out.ext` - never guessed.
   function defaultOutput() {
     if (!inputFile) return '';
     let ext = '.ext';
@@ -123,13 +123,19 @@
     if (eff && eff.length > 0) {
       const last = String(eff[eff.length - 1]);
       // Only a real *output* determines the container - the input
-      // path itself (or a flag) means "not translated yet" → output.ext.
+      // path itself (or a flag) means "not translated yet" → -out.ext.
       if (!last.startsWith('-') && last !== inputFile) {
         const e = extname(last);
         if (e) ext = e;
       }
     }
-    return joinDir(dirname(inputFile), 'output' + ext);
+    return joinDir(dirname(inputFile), `${inputStem(inputFile)}-out` + ext);
+  }
+
+  function inputStem(p) {
+    const b = basename(String(p || ''));
+    const e = extname(b);
+    return (e ? b.slice(0, -e.length) : b) || 'output';
   }
 
   function refreshOutputDisplay() {
@@ -146,8 +152,8 @@
     }
     outputPath.value = shown;
     outputPath.placeholder = inputFile
-      ? 'Defaults to output.ext next to the input'
-      : 'Defaults to output.ext next to the input after translating';
+      ? 'Defaults to <name>-out.ext next to the input'
+      : 'Defaults to <name>-out.ext next to the input after translating';
     // No destination, no folder to open.
     if (openFolderBtn) openFolderBtn.disabled = !shown.trim();
   }

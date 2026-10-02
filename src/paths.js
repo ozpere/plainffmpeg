@@ -176,23 +176,30 @@ function isMsvcMissingError(err) {
   try { return !msvcRuntimeStatus().present; } catch { return false; }
 }
 
-// Default output: same directory as the input, named `output.<ext>` where
-// <ext> comes from the translated command's output. Until translated it is
-// literally `output.ext` - never a guessed container.
+// Default output: same directory as the input, named `<name>-out.<ext>`
+// where <name> is the input's own basename (so consecutive videos never
+// collide) and <ext> comes from the translated command's output. Until
+// translated it is literally `<name>-out.ext` - never a guessed container.
 function defaultOutputPath(inputFile, args) {
   const dir = inputFile ? path.dirname(inputFile) : process.cwd();
   let ext = '';
   if (Array.isArray(args) && args.length > 0) {
     const last = args[args.length - 1];
     // Only a translated *output* determines the container - the input
-    // path itself (or a flag) means "not translated yet" → output.ext.
+    // path itself (or a flag) means "not translated yet" → -out.ext.
     if (last && !String(last).startsWith('-') && String(last) !== String(inputFile || '')) {
       const e = path.extname(String(last));
       if (e) ext = e;
     }
   }
   if (!ext) ext = '.ext';
-  return path.join(dir, `output${ext}`);
+  let stem = 'output';
+  if (inputFile) {
+    const base = path.basename(String(inputFile));
+    const ie = path.extname(base);
+    stem = (ie ? base.slice(0, -ie.length) : base) || 'output';
+  }
+  return path.join(dir, `${stem}-out${ext}`);
 }
 
 // The output extension always follows the translated command: if the user

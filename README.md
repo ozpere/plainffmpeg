@@ -128,8 +128,8 @@ models/                GGUF weights live here (gitignored, never committed)
 - Size limits ("below 2GB") are enforced with single-pass capped
   bitrate computed from the probed duration (stretched by slow motion,
   shrunk by high speed) - two-pass is never used.
-- Output extensions always follow the effective command (box edits win over the stored translation), and the app
-  asks before overwriting an existing file.
+- Output extensions always follow the effective command (box edits win over the stored translation), defaulting to
+  `<name>-out.<ext>` next to the input, and the app asks before overwriting an existing file.
 - Long runs show live progress and can be stopped with the Stop button -
   stopping keeps any partial output and marks the run Cancelled, never Failed.
 - Open folder jumps to the output directory (disabled until a destination

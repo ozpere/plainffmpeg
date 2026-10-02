@@ -72,7 +72,7 @@ Order is fixed in `runTranslationPipeline`:
 
 - No silent fallbacks anywhere. LLM failure returns `{ ok: false, error, diag, errorKind }` (plus `raw` for the logs and `hint` for `msvc-missing`) and UI shows banner. Never run a guessed command. `fallbackTranslate` must not exist.
 - `-y` is forced at run time (`finalArgs.unshift('-y')`). Overwrite consent is asked beforehand via in-app modal.
-- Output extension always follows the effective container (`enforceOutputExtension`, `coerceExt`). `defaultOutputPath` is `output.<ext>` next to input, `output.ext` before translation. Never guess a container. The editable `#cmdOut` box wins over the stored translation for Run and extension; it runs as-is (only `-y` plus extension are enforced) and must contain `-i`.
+- Output extension always follows the effective container (`enforceOutputExtension`, `coerceExt`). `defaultOutputPath` is `<name>-out.<ext>` next to input, `<name>-out.ext` before translation. Never guess a container. The editable `#cmdOut` box wins over the stored translation for Run and extension; it runs as-is (only `-y` plus extension are enforced) and must contain `-i`.
 - Probe uses `ffmpeg -i` stderr parse (no ffprobe dep). `run-ffmpeg` replaces trailing output token with explicit `outputFile`.
 - `resolveModelPath` honors `MODEL_PATH` env. Portable branch is deliberately short: exe-side `PlainFFmpegData` home, then per-user data dir as the LAST fallback (nothing after it). Other flows: preferred write target, then any dir holding an existing download, then Qwen alias filenames.
 - Thin installer: no `*.gguf` is ever bundled (`build.files` excludes models). First launch shows `#modelDl`; `download-model` IPC streams `model-download-progress` and warms the engine on success.
