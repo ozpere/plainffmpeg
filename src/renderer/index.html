@@ -57,13 +57,49 @@
   </section>
 
   <section class="prompt-row">
+    <label for="engineSel">Translation engine</label>
+    <div class="output-row">
+      <select id="engineSel">
+        <option value="local">Local AI (offline, on-device)</option>
+        <option value="external">External AI (your own key)</option>
+      </select>
+      <button id="extSettingsBtn" type="button">External AI settings…</button>
+    </div>
+  </section>
+
+  <section id="extCard" class="card model-dl" hidden>
+    <div class="model-dl-text">
+      <strong>External AI (optional, your key)</strong>
+      <span class="hint">Sends only the instruction text, file name, duration and resolution to the provider - never file bytes. Needs a free key from the provider (email signup, no card). Local stays the default.</span>
+    </div>
+    <label for="extPreset">Provider preset</label>
+    <select id="extPreset">
+      <option value="groq">Groq</option>
+      <option value="openrouter">OpenRouter</option>
+      <option value="custom">Custom…</option>
+    </select>
+    <label for="extBaseUrl">Base URL (OpenAI-compatible)</label>
+    <input id="extBaseUrl" type="text" spellcheck="false" placeholder="https://api.groq.com/openai/v1" />
+    <label for="extModel">Model</label>
+    <input id="extModel" type="text" spellcheck="false" placeholder="llama-3.3-70b-versatile" />
+    <label for="extKey">API key (stored in the OS keychain)</label>
+    <input id="extKey" type="password" autocomplete="off" spellcheck="false" placeholder="Paste key - leave blank to keep the saved one" />
+    <div class="btn-row ext-actions">
+      <button id="extSaveBtn" type="button" class="primary">Save</button>
+      <button id="extTestBtn" type="button">Test</button>
+      <button id="extClearBtn" type="button">Forget key</button>
+    </div>
+    <span id="extStatus" class="progress-status" aria-live="polite"></span>
+  </section>
+
+  <section class="prompt-row">
     <label for="outputPath">Output file</label>
     <div class="output-row">
       <input id="outputPath" type="text" readonly placeholder="Defaults to <name>-out.ext next to the input after translating" />
       <button id="chooseOutputBtn" type="button">Choose…</button>
       <button id="openFolderBtn" type="button" disabled>Open folder</button>
     </div>
-    <p class="hint">Folder and name are yours - the extension always follows the translated command. We ask before overwriting an existing file.</p>
+    <p class="hint">Folder and name are yours - the extension always follows the effective command. We ask before overwriting an existing file.</p>
   </section>
 
   <section class="btn-row">

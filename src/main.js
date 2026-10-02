@@ -1,14 +1,17 @@
 /**
- * Electron main process - zero external services.
- * LLM runs locally via node-llama-cpp loading bundled ./models/model.gguf.
- * No Ollama, no Python, no network services.
+ * Electron main process - local-first translation.
+ * The LLM runs locally via node-llama-cpp loading bundled ./models/model.gguf.
+ * An optional BYOK external engine (OpenAI-compatible) can be enabled in
+ * settings; it sends only the prompt text, never file bytes. No Ollama,
+ * no Python, no bundled cloud services.
  */
 const path = require('path');
 const fs = require('fs');
 
 // Local modules (pure moves out of this file - no behavior change):
 // fixups = deterministic translation pipeline, paths = on-disk locations,
-// llm = local GGUF engine. This module keeps Electron, IPC, and orchestration.
+// llm = local GGUF engine, external = optional BYOK cloud engine. This
+// module keeps Electron, IPC, and orchestration.
 const {
   sanitizeModelOutput,
   tokenizeArgs,
@@ -74,6 +77,7 @@ const {
   llamaDiagSummary,
   getLlamaSession,
 } = require('./llm');
+const external = require('./external');
 
 // Electron is only fully available inside the Electron runtime. Keep this module
 // require-safe (headless smoke tests) by degrading gracefully outside Electron.
@@ -362,16 +366,23 @@ function handleModelStatus() {
   };
 }
 
-async function handleTranslatePrompt({ instruction, inputFile, duration, width, height }) {
+// Prompt text shared by both engines: exact numbers are pre-computed by the
+// deterministic builders so the model only has to apply them verbatim.
+function buildUserPrompt({ instruction, inputFile, duration, width, height }) {
   const durLine = duration && duration > 0 ? `Input duration: ${duration} seconds.\n` : '';
   const dimLine = (width > 0 && height > 0) ? `Source resolution: ${width}x${height}.\n` : '';
-  // Exact numbers are pre-computed by the deterministic builders so the
-  // model only has to apply them verbatim (see fixups.js).
   const sizeLine = buildSizeLine(instruction, duration);
   const middleLine = buildMiddleLine(instruction, duration);
   const rangeLine = buildRangeLine(instruction);
   const speedLine = buildSpeedLine(instruction);
-  const userPrompt = `Input file: ${inputFile || 'input.mp4'}\n${durLine}${dimLine}${sizeLine}${middleLine}${rangeLine}${speedLine}Task: ${instruction || ''}\nFFmpeg args:\n/no_think`;
+  return `Input file: ${inputFile || 'input.mp4'}\n${durLine}${dimLine}${sizeLine}${middleLine}${rangeLine}${speedLine}Task: ${instruction || ''}\nFFmpeg args:\n/no_think`;
+}
+
+async function handleTranslatePrompt({ instruction, inputFile, duration, width, height, engine }) {
+  if (engine === 'external') {
+    return handleExternalPrompt({ instruction, inputFile, duration, width, height });
+  }
+  const userPrompt = buildUserPrompt({ instruction, inputFile, duration, width, height });
   // No silent fallback: any LLM problem is returned as an error so the UI
   // can alert the user instead of running a guessed-up command.
   let rawOut = '';
@@ -429,6 +440,88 @@ async function handleTranslatePrompt({ instruction, inputFile, duration, width, 
       errorKind: 'load-failed',
     };
   }
+}
+
+// External engine: same prompt in, same fixup pipeline out. Only the model
+// call differs. The key never leaves the main process and never lands in logs.
+async function handleExternalPrompt({ instruction, inputFile, duration, width, height }) {
+  const userPrompt = buildUserPrompt({ instruction, inputFile, duration, width, height });
+  let rawOut = '';
+  try {
+    const full = external.readFullConfig();
+    if (!full.configured) {
+      throw new Error(full.keyError || 'External AI is not set up yet - save a base URL, model, and API key first.');
+    }
+    const { text, model } = await external.callExternalTranslate({
+      baseUrl: full.baseUrl,
+      apiKey: full.apiKey,
+      model: full.model,
+      system: SYSTEM_PROMPT,
+      user: userPrompt,
+    });
+    rawOut = String(text || '');
+    const cleaned = sanitizeModelOutput(text);
+    if (!cleaned) throw new Error('External AI returned empty output.');
+    const tokens = tokenizeArgs(cleaned, inputFile);
+    const { args, corrections } = runTranslationPipeline(tokens, { instruction, inputFile, duration });
+    return {
+      ok: true,
+      engine: `external (${model})`,
+      raw: text,
+      argsString: quoteArgs(args),
+      args,
+      corrections,
+    };
+  } catch (err) {
+    const message = err && err.message ? err.message : String(err);
+    console.error('[main] external translate failed:', message);
+    return {
+      ok: false,
+      engine: 'external',
+      error: message,
+      raw: rawOut || undefined,
+      errorKind: 'external-failed',
+      hint: external.externalErrorHint(err),
+    };
+  }
+}
+
+function handleGetExternalConfig() {
+  try {
+    return { ok: true, ...external.readPublicConfig() };
+  } catch (err) {
+    return { ok: false, configured: false, error: String((err && err.message) || err) };
+  }
+}
+
+async function handleSetExternalConfig(payload) {
+  const saved = external.saveExternalConfig(payload || {});
+  return { ok: true, ...saved };
+}
+
+async function handleClearExternalConfig() {
+  external.clearExternalConfig();
+  return { ok: true };
+}
+
+// Tests the saved config, or the given form values without saving them.
+async function handleTestExternal(payload) {
+  let cfg = payload && payload.baseUrl ? payload : null;
+  let key = cfg && cfg.apiKey;
+  if (!cfg) {
+    const full = external.readFullConfig();
+    if (!full.configured) throw new Error(full.keyError || 'External AI is not set up yet.');
+    cfg = full;
+    key = full.apiKey;
+  }
+  const { text } = await external.callExternalTranslate({
+    baseUrl: cfg.baseUrl,
+    apiKey: key,
+    model: cfg.model,
+    system: 'Reply with exactly: OK',
+    user: 'OK',
+  });
+  return { ok: true, sample: String(text).slice(0, 120) };
 }
 
 function validWindow() {
@@ -683,6 +776,10 @@ if (isElectron && ipcMain) {
   ipcMain.handle('probe-media', async (_e, inputFile) => probeMedia(inputFile));
   ipcMain.handle('run-ffmpeg', async (event, payload) => handleRunFfmpeg(event, payload || {}));
   ipcMain.handle('cancel-ffmpeg', async (event) => handleCancelFfmpeg(event));
+  ipcMain.handle('get-external-config', async () => handleGetExternalConfig());
+  ipcMain.handle('set-external-config', async (_e, payload) => handleSetExternalConfig(payload || {}));
+  ipcMain.handle('clear-external-config', async () => handleClearExternalConfig());
+  ipcMain.handle('test-external', async (_e, payload) => handleTestExternal(payload || {}));
 }
 
 module.exports = {
@@ -738,6 +835,12 @@ module.exports = {
   defaultOutputPath,
   handleModelStatus,
   handleTranslatePrompt,
+  buildUserPrompt,
+  handleExternalPrompt,
+  handleGetExternalConfig,
+  handleSetExternalConfig,
+  handleClearExternalConfig,
+  handleTestExternal,
   handleOutputExists,
   handleSaveDroppedFile,
   handleOpenPath,
@@ -753,4 +856,15 @@ module.exports = {
   handleWindowMax,
   handleWindowClose,
   SYSTEM_PROMPT,
+  callExternalTranslate: external.callExternalTranslate,
+  normalizeBaseUrl: external.normalizeBaseUrl,
+  buildExternalMessages: external.buildExternalMessages,
+  parseOpenAIContent: external.parseOpenAIContent,
+  externalErrorHint: external.externalErrorHint,
+  readPublicConfig: external.readPublicConfig,
+  readFullConfig: external.readFullConfig,
+  saveExternalConfig: external.saveExternalConfig,
+  clearExternalConfig: external.clearExternalConfig,
+  EXTERNAL_PRESETS: external.EXTERNAL_PRESETS,
+  EXTERNAL_TIMEOUT_MS: external.EXTERNAL_TIMEOUT_MS,
 };

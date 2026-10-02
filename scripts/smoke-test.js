@@ -12,6 +12,7 @@ const required = [
   'src/fixups.js',
   'src/paths.js',
   'src/llm.js',
+  'src/external.js',
   'src/preload.js',
   'src/renderer/index.html',
   'src/renderer/renderer.js',
@@ -34,12 +35,13 @@ async function main() {
   console.log('[smoke] project files OK');
 
   // syntax is also covered file-by-file via `npm test`; here require pure helpers.
-  // main.js re-exports the split modules (fixups/paths/llm) so the established
-  // contract holds; the modules themselves are asserted directly too.
+  // main.js re-exports the split modules (fixups/paths/llm/external) so the
+  // established contract holds; the modules themselves are asserted directly too.
   const mainMod = require('../src/main.js');
   const fixupsMod = require('../src/fixups.js');
   const pathsMod = require('../src/paths.js');
   const llmMod = require('../src/llm.js');
+  const externalMod = require('../src/external.js');
   assert.strictEqual(typeof mainMod.sanitizeModelOutput, 'function');
   assert.strictEqual(typeof mainMod.tokenizeArgs, 'function');
   assert.strictEqual(typeof mainMod.handleTranslatePrompt, 'function');
@@ -48,6 +50,9 @@ async function main() {
   assert.strictEqual(pathsMod.resolveModelPath, mainMod.resolveModelPath, 'paths must be the same functions main re-exports');
   assert.strictEqual(typeof llmMod.getLlamaSession, 'function', 'llm module must own the session');
   assert.strictEqual(mainMod.SYSTEM_PROMPT, llmMod.SYSTEM_PROMPT, 'main must re-export the llm system prompt');
+  assert.strictEqual(externalMod.callExternalTranslate, mainMod.callExternalTranslate, 'external must be the same functions main re-exports');
+  assert.strictEqual(typeof mainMod.buildUserPrompt, 'function', 'prompt builder must exist for both engines');
+  assert.strictEqual(typeof mainMod.handleExternalPrompt, 'function', 'external translate path must exist');
 
   // sanitize: strip fences + leading binary name
   assert.strictEqual(
@@ -651,6 +656,99 @@ async function main() {
   assert.ok(typeof failRes.errorKind === 'string', 'failure must classify the error kind');
   console.log('[smoke] failure diagnostics OK');
 
+  // external engine (BYOK, OpenAI-compatible only): shared prompt, same
+  // pipeline, key never leaks into errors or status payloads.
+  {
+    const up = mainMod.buildUserPrompt({ instruction: 'Convert to mp4', inputFile: '/v/clip.mp4', duration: 30, width: 640, height: 360 });
+    assert.ok(up.includes('Input file: /v/clip.mp4'), 'shared prompt must carry the input');
+    assert.ok(up.includes('Task: Convert to mp4'), 'shared prompt must carry the task');
+    assert.ok(up.includes('/no_think'), 'shared prompt must close with the marker');
+    assert.ok(up.includes('640x360'), 'shared prompt must carry source resolution');
+    const msgs = externalMod.buildExternalMessages('SYS', 'USER');
+    assert.deepStrictEqual(msgs, [{ role: 'system', content: 'SYS' }, { role: 'user', content: 'USER' }]);
+    assert.strictEqual(externalMod.normalizeBaseUrl('https://x.test/v1/'), 'https://x.test/v1');
+    assert.strictEqual(externalMod.normalizeBaseUrl('https://x.test/v1/chat/completions'), 'https://x.test/v1');
+    assert.strictEqual(externalMod.parseOpenAIContent({ choices: [{ message: { content: '-i a b.mp4' } }] }), '-i a b.mp4');
+    assert.throws(() => externalMod.parseOpenAIContent({ choices: [] }), /unexpected response/);
+    // prompt parity: the external route uses the same builder as local.
+    assert.ok(mainSrc.includes('buildUserPrompt({ instruction'), 'both engines must share the prompt builder');
+    // the key must never appear in public config or hints.
+    const pub = await mainMod.handleGetExternalConfig();
+    assert.strictEqual(pub.ok, true);
+    assert.ok(!('apiKey' in pub), 'public config must never carry the key');
+    assert.ok(!JSON.stringify(pub).includes('sk-'), 'public config must not leak key material');
+    assert.ok(externalMod.externalErrorHint(new Error('x')).length === 0 || typeof externalMod.externalErrorHint(new Error('x')) === 'string');
+    assert.ok(externalMod.externalErrorHint(new Error('HTTP 401')).includes('API key'), '401 must point at the key');
+    assert.ok(externalMod.externalErrorHint(new Error('HTTP 429')).includes('rate'), '429 must name rate limits');
+    // localhost provider: success, status mapping, timeout, key redaction.
+    const http = require('http');
+    const okBody = JSON.stringify({ choices: [{ message: { content: '-i in.mp4 -c:v libx264 out.mp4' } }] });
+    const srv = http.createServer((req, res) => {
+      if (req.url === '/v1-401/chat/completions') { res.writeHead(401); res.end('no'); return; }
+      if (req.url === '/v1-429/chat/completions') { res.writeHead(429); res.end('slow'); return; }
+      if (req.url === '/v1-slow/chat/completions') { return; } // hang -> client timeout
+      let body = '';
+      req.on('data', (c) => { body += c; });
+      req.on('end', () => {
+        const parsed = JSON.parse(body);
+        assert.strictEqual(req.headers.authorization, 'Bearer sk-test', 'key must ride the Authorization header');
+        assert.ok(parsed.messages.some((m) => m.role === 'system'), 'system prompt must be sent');
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(okBody);
+      });
+    });
+    await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+    const port = srv.address().port;
+    try {
+      const good = await externalMod.callExternalTranslate({
+        baseUrl: `http://127.0.0.1:${port}/v1`, apiKey: 'sk-test', model: 'm',
+        system: 'SYS', user: 'USER',
+      });
+      assert.strictEqual(good.text, '-i in.mp4 -c:v libx264 out.mp4');
+      await assert.rejects(
+        externalMod.callExternalTranslate({ baseUrl: `http://127.0.0.1:${port}/v1-401`, apiKey: 'sk-test', model: 'm', system: 'S', user: 'U' }),
+        /API key/,
+        '401 must blame the key'
+      );
+      await assert.rejects(
+        externalMod.callExternalTranslate({ baseUrl: `http://127.0.0.1:${port}/v1-429`, apiKey: 'sk-test', model: 'm', system: 'S', user: 'U' }),
+        /rate-limited/,
+        '429 must name rate limits'
+      );
+      await assert.rejects(
+        externalMod.callExternalTranslate({ baseUrl: `http://127.0.0.1:${port}/v1-slow`, apiKey: 'sk-test', model: 'm', system: 'S', user: 'U', timeoutMs: 300 }),
+        /timed out/,
+        'hung provider must time out'
+      );
+      // end-to-end through the real pipeline: external raw output is fixed up.
+      const extTokens = mainMod.tokenizeArgs('-i input.mp4 -s 360p clip-out.mp4', '/v/clip.mp4');
+      const extComposed = mainMod.runTranslationPipeline(extTokens, { instruction: 'make it 360p', inputFile: '/v/clip.mp4', duration: 30 });
+      assert.ok(extComposed.args.join(' ').includes('scale=-2:360'), 'external output runs the same fixups');
+      await assert.rejects(
+        externalMod.callExternalTranslate({ baseUrl: 'not-a-url', apiKey: 'k', model: 'm', system: 'S', user: 'U' }),
+        /base URL/,
+        'bad base URL rejected before the network'
+      );
+      try {
+        await externalMod.callExternalTranslate({ baseUrl: `http://127.0.0.1:${port}/v1-401`, apiKey: 'sk-super-secret', model: 'm', system: 'S', user: 'U' });
+        assert.fail('must throw');
+      } catch (e) {
+        assert.ok(!String((e && e.message) || e).includes('sk-super-secret'), 'errors must never echo the key');
+        assert.ok(!externalMod.externalErrorHint(e).includes('sk-super-secret'), 'hints must never echo the key');
+      }
+    } finally {
+      srv.close();
+    }
+    // unconfigured external translate fails cleanly with its own error kind.
+    delete process.env.EXTERNAL_CONFIG_DIR;
+    const uncfg = await mainMod.handleExternalPrompt({ instruction: 'x', inputFile: 'x.mp4' });
+    assert.strictEqual(uncfg.ok, false, 'unconfigured external must report failure, not fallback');
+    assert.strictEqual(uncfg.errorKind, 'external-failed', 'external failures classify distinctly');
+    assert.strictEqual(uncfg.engine, 'external');
+    assert.ok(typeof uncfg.hint === 'string' && uncfg.hint.length > 0, 'external failure must carry a hint');
+  }
+  console.log('[smoke] external engine OK');
+
   // errors stay in-app: no native popups, jargon translated for humans
   for (const f of ['src/renderer/renderer.js', 'src/renderer/index.html']) {
     const content = fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
@@ -691,11 +789,11 @@ async function main() {
   }
 
   // preload/renderer reference matching IPC channels + error UI
-  for (const ch of ['translatePrompt', 'runFfmpeg', 'cancelFfmpeg', 'modelStatus', 'pickFile', 'pickOutput', 'probeMedia', 'outputExists', 'saveDroppedFile', 'openPath', 'downloadModel', 'windowMin', 'windowMax', 'windowClose']) {
+  for (const ch of ['translatePrompt', 'runFfmpeg', 'cancelFfmpeg', 'modelStatus', 'pickFile', 'pickOutput', 'probeMedia', 'outputExists', 'saveDroppedFile', 'openPath', 'downloadModel', 'windowMin', 'windowMax', 'windowClose', 'getExternalConfig', 'setExternalConfig', 'clearExternalConfig', 'testExternal']) {
     assert.ok(preload.includes(ch), `preload missing ${ch}`);
   }
   // Mirror direction: every exposed relay must have a real handler in main.
-  for (const ch of ['model-status', 'translate-prompt', 'download-model', 'pick-file', 'pick-output', 'output-exists', 'save-dropped-file', 'open-path', 'window-min', 'window-max', 'window-close', 'probe-media', 'run-ffmpeg', 'cancel-ffmpeg']) {
+  for (const ch of ['model-status', 'translate-prompt', 'download-model', 'pick-file', 'pick-output', 'output-exists', 'save-dropped-file', 'open-path', 'window-min', 'window-max', 'window-close', 'probe-media', 'run-ffmpeg', 'cancel-ffmpeg', 'get-external-config', 'set-external-config', 'clear-external-config', 'test-external']) {
     assert.ok(mainSrc.includes(`ipcMain.handle('${ch}'`), `main missing handler ${ch}`);
   }
   // Subscribers must not leak the emitter: returning ipcRenderer.on(...)
@@ -788,6 +886,13 @@ async function main() {
   assert.ok(!html.includes('id="cmdEdit"'), 'separate override field must be gone');
   assert.ok(!renderer.includes('cmdEdit'), 'renderer must not reference the old field');
   assert.ok(renderer.includes('tokenizeCustomCommand'), 'box edits must tokenize quoted paths');
+  // engine selector: local default, external opt-in with its own settings.
+  assert.ok(html.includes('id="engineSel"'), 'UI must have the engine selector');
+  assert.ok(html.includes('id="extCard"'), 'UI must have the external settings card');
+  assert.ok(html.includes('id="extKey"'), 'settings must have a key field');
+  assert.ok(renderer.includes("engine: engineChoice"), 'translate must forward the chosen engine');
+  assert.ok(renderer.includes('External AI is not set up yet'), 'missing setup must have plain copy');
+  assert.ok(renderer.includes('rate-limited this key'), 'rate limits must have plain copy');
   // unbounded log growth freezes the page on long ffmpeg runs.
   assert.ok(renderer.includes('200000'), 'terminal log must be capped');
   // dead dialogs must explain themselves instead of hanging silently.

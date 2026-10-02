@@ -15,6 +15,10 @@ contextBridge.exposeInMainWorld('api', {
   runFfmpeg: (payload) => ipcRenderer.invoke('run-ffmpeg', payload),
   cancelFfmpeg: () => ipcRenderer.invoke('cancel-ffmpeg'),
   downloadModel: (payload) => ipcRenderer.invoke('download-model', payload || {}),
+  getExternalConfig: () => ipcRenderer.invoke('get-external-config'),
+  setExternalConfig: (payload) => ipcRenderer.invoke('set-external-config', payload || {}),
+  clearExternalConfig: () => ipcRenderer.invoke('clear-external-config'),
+  testExternal: (payload) => ipcRenderer.invoke('test-external', payload || {}),
   // Subscribe helpers return an unsubscribe function - never the emitter
   // itself (returning ipcRenderer.on(...) would hand the page full
   // invoke/send access past the allowlist).

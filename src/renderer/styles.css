@@ -126,15 +126,17 @@ label { font-size: 13px; font-weight: 600; color: var(--muted); }
 #barModel { height: 100%; width: 0; border-radius: 999px; transition: width 0.25s; background: var(--accent); }
 
 /* inputs & buttons */
-#instruction, #outputPath {
+#instruction, #outputPath, #engineSel, #extPreset, #extBaseUrl, #extModel, #extKey {
   width: 100%; padding: 11px 13px; border-radius: 6px;
   border: 1px solid var(--border); background: #100e0b;
   color: var(--text); font-size: 14px; font-family: inherit;
 }
-#instruction:focus, #outputPath:focus { outline: none; border-color: var(--accent); }
-#instruction:focus-visible, #outputPath:focus-visible, button:focus-visible, #dropzone:focus-visible {
+#instruction:focus, #outputPath:focus, #engineSel:focus, #extPreset:focus, #extBaseUrl:focus, #extModel:focus, #extKey:focus { outline: none; border-color: var(--accent); }
+#instruction:focus-visible, #outputPath:focus-visible, #engineSel:focus-visible, #extPreset:focus-visible, #extBaseUrl:focus-visible, #extModel:focus-visible, #extKey:focus-visible, button:focus-visible, #dropzone:focus-visible {
   outline: 2px solid var(--accent); outline-offset: 2px;
 }
+.output-row #engineSel { flex: 1; min-width: 0; }
+.ext-actions { justify-content: flex-start; }
 #outputPath { font-family: ui-monospace, "Cascadia Code", Consolas, monospace; font-size: 12.5px; }
 .output-row { display: flex; gap: 8px; }
 .output-row #outputPath { flex: 1; min-width: 0; }

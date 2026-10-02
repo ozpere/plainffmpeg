@@ -30,13 +30,14 @@ Before every commit and push, update `AGENTS.md` and `README.md` when anything t
 ## Layout
 
 ```
-src/main.js              Main process: Electron bootstrap, window, IPC handlers, translate/run orchestration (re-exports fixups/paths/llm to preserve the module contract)
+src/main.js              Main process: Electron bootstrap, window, IPC handlers, translate/run orchestration (local + external routing, re-exports fixups/paths/llm/external to preserve the module contract)
 src/fixups.js            Deterministic translation pipeline: sanitize, tokenize, all fixup* layers, parse/format helpers. Pure functions, no Electron.
 src/paths.js             On-disk locations: model resolution, portable dirs, MSVC detection, output paths. Own require-safe Electron import.
 src/llm.js               Local GGUF engine: SYSTEM_PROMPT, session state, diagnostics. No Electron; orchestrated by main.js.
+src/external.js          Optional BYOK engine: OpenAI-compatible caller, presets, OS-keychain settings. No Electron; orchestrated by main.js.
 src/preload.js           contextBridge API, must mirror IPC channels 1:1
-src/renderer/renderer.js UI logic: load, probe, translate, run, drag-drop, modals, badges, model download, editable command box
-src/renderer/index.html  UI structure, frameless titlebar, split progress bars, model download card, editable #cmdOut
+src/renderer/renderer.js UI logic: load, probe, translate, run, drag-drop, modals, badges, model download, editable command box, engine selector + external settings
+src/renderer/index.html  UI structure, frameless titlebar, split progress bars, model download card, editable #cmdOut, #engineSel + #extCard
 src/renderer/styles.css  Warm-charcoal theme, no gradients
 scripts/download-model.js GGUF fetcher, resumable (TARGET is models/model.gguf, shared by main via downloadTo)
 scripts/fetch-vc-redist.js MSVC redist fetcher for the installer (not committed)
@@ -70,7 +71,7 @@ Order is fixed in `runTranslationPipeline`:
 
 ## Critical invariants
 
-- No silent fallbacks anywhere. LLM failure returns `{ ok: false, error, diag, errorKind }` (plus `raw` for the logs and `hint` for `msvc-missing`) and UI shows banner. Never run a guessed command. `fallbackTranslate` must not exist.
+- No silent fallbacks anywhere. LLM failure returns `{ ok: false, error, diag, errorKind }` (plus `raw` for the logs and `hint` for `msvc-missing`) and UI shows banner. External failure returns `errorKind: 'external-failed'` with a `hint` (bad key, rate limit, timeout, not configured) and never falls back to local silently. Never run a guessed command. `fallbackTranslate` must not exist.
 - `-y` is forced at run time (`finalArgs.unshift('-y')`). Overwrite consent is asked beforehand via in-app modal.
 - Output extension always follows the effective container (`enforceOutputExtension`, `coerceExt`). `defaultOutputPath` is `<name>-out.<ext>` next to input, `<name>-out.ext` before translation. Never guess a container. The editable `#cmdOut` box wins over the stored translation for Run and extension; it runs as-is (only `-y` plus extension are enforced) and must contain `-i`.
 - Probe uses `ffmpeg -i` stderr parse (no ffprobe dep). `run-ffmpeg` replaces trailing output token with explicit `outputFile`.
@@ -83,12 +84,12 @@ Order is fixed in `runTranslationPipeline`:
 - Downloads are verified before staging: per-source `.source` sidecars (no cross-origin resume), `Content-Range` start validated (one restart), `done === total` enforced, GGUF magic gate (`expectMagic`) for models, MZ + size gate (`assertPlausibleExe`) for the redist. Present files are re-checked on the skip path (`takeUsableModel`, `existingRedistUsable`) and re-fetched on mismatch. A 60s stall watchdog aborts hung model connections for resume; the redist fetch retries 3x with a timeout.
 - `postinstall` uses `--best-effort` (offline installs warn and continue); direct `npm run download-model` stays strict.
 - Preload subscribers return unsubscribe closures, never the emitter. `confirmDialog` serializes through a queue; the modal traps/restores focus and parks the background with `inert`.
-- Translate gates time/size requests on the probed duration; Run is locked during translation; `setFile` resets translation state; `run-ffmpeg` requires an IPC sender (guarded, exported for tests). `setFile` clears the command box too; Run uses `effectiveArgs` (box edits win). Long runs are stoppable: `cancel-ffmpeg` kills the spawned process and the run resolves cancelled (never failed).
+- Translate gates time/size requests on the probed duration; Run is locked during translation; `setFile` resets translation state; `run-ffmpeg` requires an IPC sender (guarded, exported for tests). `setFile` clears the command box too; Run uses `effectiveArgs` (box edits win). Long runs are stoppable: `cancel-ffmpeg` kills the spawned process and the run resolves cancelled (never failed). `translate-prompt` takes `{ engine }` (default local); external uses the shared `buildUserPrompt` and the same pipeline, key via safeStorage only.
 - NSIS: exit allowlist `{0, 1638, 3010}`, decline codes `{1223, 5}` get elevation-specific guidance; uninstall removes `%APPDATA%\PlainFFmpeg` only.
 
 ## IPC and UI
 
-- Channels (preload must expose all): `modelStatus, translatePrompt, downloadModel, pickFile, pickOutput, outputExists, saveDroppedFile, openPath, windowMin, windowMax, windowClose, probeMedia, runFfmpeg, cancelFfmpeg` plus `ffmpeg-log` / `ffmpeg-progress` / `model-download-progress` events.
+- Channels (preload must expose all): `modelStatus, translatePrompt, downloadModel, pickFile, pickOutput, outputExists, saveDroppedFile, openPath, windowMin, windowMax, windowClose, probeMedia, runFfmpeg, cancelFfmpeg, getExternalConfig, setExternalConfig, clearExternalConfig, testExternal` plus `ffmpeg-log` / `ffmpeg-progress` / `model-download-progress` events.
 - Frameless window (`frame: false`), custom `#titlebar` with `#minBtn #maxBtn #closeBtn`, `-webkit-app-region: drag` with `no-drag` on controls.
 - Errors surface via `#errorBanner` + `showBanner` + `prettyLlmError`. Never `window.alert` or native `confirm`. Overwrite uses `#confirmOverlay` + `confirmOverwriteUI`; storage consent reuses the same modal via `confirmDialog`.
 - Badge flow: `unavailable > loading > ready`, plus red `error` on load failure. One loop via `scheduleRefresh` (cancels the pending poll first). Step outcomes (`#translateStatus`, `#ffmpegStatus`) go through `setStatus` into `st-idle / st-active / st-done / st-failed / st-cancelled` classes: theme colors plus a monochrome CSS `::before` mark, so Done / Failed / Cancelled read at a glance while the copy stays exactly `Idle / Translating... / Running... / Done / Failed / Cancelled`. Terminal `#terminal` starts empty and collapsed (`hidden`), log capped at 200 KB.

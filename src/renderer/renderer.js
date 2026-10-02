@@ -40,6 +40,17 @@
   const closeBtn = $('closeBtn');
   const titlebar = $('titlebar');
   const terminal = $('terminal');
+  const engineSel = $('engineSel');
+  const extSettingsBtn = $('extSettingsBtn');
+  const extCard = $('extCard');
+  const extPreset = $('extPreset');
+  const extBaseUrl = $('extBaseUrl');
+  const extModel = $('extModel');
+  const extKey = $('extKey');
+  const extSaveBtn = $('extSaveBtn');
+  const extTestBtn = $('extTestBtn');
+  const extClearBtn = $('extClearBtn');
+  const extStatus = $('extStatus');
 
   let inputFile = null;
   let mediaDuration = null; // seconds, probed at load; resolves "last N seconds"
@@ -80,6 +91,18 @@
     }
     if (/model file not found/i.test(m)) {
       return 'Model file not found. Press "Download AI model" above (one-time download), or run `npm run download-model` in dev, then try again.';
+    }
+    if (/not set up yet|not configured/i.test(m)) {
+      return 'External AI is not set up yet - open External AI settings and save a base URL, model, and API key first.';
+    }
+    if (/rejected the API key|401|403/i.test(m)) {
+      return 'External AI rejected the API key - check it in External AI settings (wrong key, revoked, or wrong provider for this URL), then Test again.';
+    }
+    if (/rate-limit|429/i.test(m)) {
+      return 'External AI rate-limited this key (free tiers are strict) - wait a minute and try again.';
+    }
+    if (/timed out/i.test(m)) {
+      return 'External AI timed out - check the connection and base URL, then try again.';
     }
     return m;
   }
@@ -488,6 +511,57 @@
     if (repollMs > 0) scheduleRefresh(repollMs);
   }
 
+  // Translation engine: local GGUF stays the default; External uses the
+  // user's own key against any OpenAI-compatible endpoint. Persist the choice
+  // locally; the key itself never leaves the OS keychain.
+  let engineChoice = 'local';
+  let extCardOpen = false;
+  try {
+    if (window.localStorage) engineChoice = window.localStorage.getItem('pfm-engine') || 'local';
+  } catch { engineChoice = 'local'; }
+  if (engineChoice !== 'external') engineChoice = 'local';
+
+  function setEngine(v) {
+    engineChoice = v === 'external' ? 'external' : 'local';
+    try {
+      if (window.localStorage) window.localStorage.setItem('pfm-engine', engineChoice);
+    } catch { /* private mode */ }
+    if (engineSel) engineSel.value = engineChoice;
+    if (extCard) extCard.hidden = engineChoice !== 'external' && !extCardOpen;
+    if (engineChoice === 'external') refreshExternalStatus();
+  }
+
+  function setExtStatus(text, isError) {
+    if (!extStatus) return;
+    extStatus.textContent = text || '';
+    extStatus.classList.toggle('st-failed', !!isError);
+    extStatus.classList.toggle('st-done', !isError && !!text);
+  }
+
+  const EXT_PRESET_URLS = {
+    groq: 'https://api.groq.com/openai/v1',
+    openrouter: 'https://openrouter.ai/api/v1',
+  };
+  const EXT_PRESET_MODELS = {
+    groq: 'llama-3.3-70b-versatile',
+    openrouter: 'openrouter/free',
+  };
+
+  async function refreshExternalStatus() {
+    try {
+      const s = await window.api.getExternalConfig();
+      if (s && s.configured) {
+        setExtStatus(`Saved: ${(s.baseUrl || '').replace(/^https?:\/\//, '')} / ${s.model || ''}`);
+      } else {
+        setExtStatus('Not set up yet - save a base URL, model, and API key.');
+      }
+      return s;
+    } catch (e) {
+      setExtStatus('Could not read settings: ' + (e && e.message ? e.message : e), true);
+      return null;
+    }
+  }
+
   async function translate() {
     const text = instruction.value.trim();
     if (!inputFile) {
@@ -511,9 +585,9 @@
     runBtn.disabled = true;
     paintBar(barTranslate, null);
     setStatus(translateStatus, 'st-active', 'Translating…');
-    log(`translating: "${text}" …`);
+    log(`translating (${engineChoice}) : "${text}" …`);
     try {
-      const res = await window.api.translatePrompt({ instruction: text, inputFile, duration: mediaDuration, width: mediaWidth, height: mediaHeight });
+      const res = await window.api.translatePrompt({ instruction: text, inputFile, duration: mediaDuration, width: mediaWidth, height: mediaHeight, engine: engineChoice });
       if (!res || res.ok === false) {
         // LLM failure: never execute the translation. Typed edits stay put -
         // they do not depend on the LLM and remain runnable.
@@ -816,6 +890,82 @@
   });
 
   translateOnlyBtn.addEventListener('click', translate);
+  if (engineSel) engineSel.addEventListener('change', () => setEngine(engineSel.value));
+  if (extSettingsBtn) extSettingsBtn.addEventListener('click', async () => {
+    extCardOpen = !extCard.hidden;
+    extCard.hidden = !extCardOpen;
+    if (extCardOpen) {
+      const s = await refreshExternalStatus();
+      if (s) {
+        if (s.baseUrl && !extBaseUrl.value) extBaseUrl.value = s.baseUrl;
+        if (s.model && !extModel.value) extModel.value = s.model;
+      }
+      try { extBaseUrl.focus(); } catch { /* ignore */ }
+    }
+  });
+  if (extPreset) extPreset.addEventListener('change', () => {
+    const id = extPreset.value;
+    if (id && id !== 'custom') {
+      if (EXT_PRESET_URLS[id]) extBaseUrl.value = EXT_PRESET_URLS[id];
+      if (EXT_PRESET_MODELS[id]) extModel.value = EXT_PRESET_MODELS[id];
+    }
+  });
+  if (extSaveBtn) extSaveBtn.addEventListener('click', async () => {
+    setExtStatus('Saving…');
+    try {
+      const payload = {
+        baseUrl: (extBaseUrl.value || '').trim(),
+        model: (extModel.value || '').trim(),
+        presetId: (extPreset && extPreset.value) || '',
+        apiKey: (extKey.value || '').trim(),
+      };
+      if (!payload.apiKey) {
+        const cur = await window.api.getExternalConfig();
+        if (cur && cur.configured) {
+          setExtStatus('Key field is blank - retype the key to save, or Test the saved one.');
+          return;
+        }
+      }
+      const res = await window.api.setExternalConfig(payload);
+      if (res && res.configured) {
+        extKey.value = '';
+        setExtStatus(`Saved: ${(res.baseUrl || '').replace(/^https?:\/\//, '')} / ${res.model || ''}`);
+        log('external AI settings saved (key stays in the OS keychain).');
+      } else {
+        setExtStatus('Save failed: ' + ((res && res.error) || 'unknown error'), true);
+      }
+    } catch (e) {
+      setExtStatus('Save failed: ' + (e && e.message ? e.message : e), true);
+    }
+  });
+  if (extTestBtn) extTestBtn.addEventListener('click', async () => {
+    setExtStatus('Testing…');
+    try {
+      const formKey = (extKey.value || '').trim();
+      const payload = formKey
+        ? { baseUrl: (extBaseUrl.value || '').trim(), model: (extModel.value || '').trim(), apiKey: formKey }
+        : undefined;
+      const res = await window.api.testExternal(payload);
+      if (res && res.ok) {
+        setExtStatus('Test passed - provider answered.');
+        log('external AI test passed.');
+      } else {
+        setExtStatus('Test failed: ' + ((res && res.error) || 'unknown error'), true);
+      }
+    } catch (e) {
+      const msg = e && e.message ? e.message : e;
+      setExtStatus('Test failed: ' + prettyLlmError(msg), true);
+      log('external AI test failed: ' + String(msg || 'unknown error'));
+    }
+  });
+  if (extClearBtn) extClearBtn.addEventListener('click', async () => {
+    try {
+      await window.api.clearExternalConfig();
+    } catch { /* already gone */ }
+    if (extKey) extKey.value = '';
+    setExtStatus('Key forgotten - external engine is unset.');
+    log('external AI settings cleared.');
+  });
   if (cmdOut) cmdOut.addEventListener('input', () => {
     clearError();
     refreshOutputDisplay();
@@ -957,5 +1107,7 @@
   });
 
   refreshOutputDisplay();
+  if (engineSel) engineSel.value = engineChoice;
+  if (extCard) extCard.hidden = engineChoice !== 'external';
   refreshStatus();
 })();
