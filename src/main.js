@@ -558,6 +558,11 @@ async function probeMedia(inputFile) {
   });
 }
 
+// Single run at a time (the UI locks while one runs): Stop kills it. The
+// close handler below turns the kill into a cancelled result, never a failure.
+let runningProc = null;
+let runCancelled = false;
+
 async function handleRunFfmpeg(event, { args, outputFile }) {
   if (!ffmpegPath) throw new Error('ffmpeg-static binary not available.');
   if (!Array.isArray(args) || args.length === 0) throw new Error('No FFmpeg args provided.');
@@ -591,10 +596,12 @@ async function handleRunFfmpeg(event, { args, outputFile }) {
   }
   const output = finalArgs[finalArgs.length - 1];
 
-  await new Promise((resolve, reject) => {
+  return await new Promise((resolve, reject) => {
     emit('ffmpeg-log', { line: `$ ${ffmpegPath} ${finalArgs.join(' ')}` });
     emit('ffmpeg-progress', { pct: 0 });
     const proc = spawn(ffmpegPath, finalArgs, { windowsHide: true });
+    runningProc = proc;
+    runCancelled = false;
     let stderr = '';
     let totalSec = 0;
     proc.stderr.on('data', (d) => {
@@ -618,21 +625,44 @@ async function handleRunFfmpeg(event, { args, outputFile }) {
     });
     proc.stdout.on('data', (d) => emit('ffmpeg-log', { line: d.toString().trim() }));
     proc.on('error', (e) => {
+      runningProc = null;
       emit('ffmpeg-log', { line: `ERROR: ${e.message}` });
       reject(e);
     });
     proc.on('close', (code) => {
+      runningProc = null;
       emit('ffmpeg-log', { line: `ffmpeg exited with code ${code}` });
+      if (runCancelled) {
+        emit('ffmpeg-progress', { done: true, cancelled: true });
+        resolve({ cancelled: true });
+        return;
+      }
       emit('ffmpeg-progress', { done: true, code });
-      if (code === 0) resolve();
+      if (code === 0) resolve({ cancelled: false });
       else {
         const hint = ffmpegFailureHint(stderr);
         reject(new Error(`ffmpeg exited with code ${code}\n${stderr.slice(-2000)}${hint ? `\n\n${hint}` : ''}`));
       }
     });
+  }).then((runRes) => {
+    if (runRes && runRes.cancelled) return { ok: true, output, cancelled: true };
+    return { ok: true, output };
   });
+}
 
-  return { ok: true, output };
+async function handleCancelFfmpeg(event) {
+  const sender = event && event.sender;
+  if (!sender || typeof sender.send !== 'function') {
+    throw new Error('cancel-ffmpeg must be called from the app window.');
+  }
+  if (!runningProc) throw new Error('No FFmpeg run in progress.');
+  runCancelled = true;
+  try {
+    runningProc.kill();
+  } catch (e) {
+    throw new Error('Could not stop FFmpeg: ' + (e && e.message ? e.message : e));
+  }
+  return { ok: true, cancelled: true };
 }
 
 if (isElectron && ipcMain) {
@@ -649,6 +679,7 @@ if (isElectron && ipcMain) {
   ipcMain.handle('window-close', async () => handleWindowClose());
   ipcMain.handle('probe-media', async (_e, inputFile) => probeMedia(inputFile));
   ipcMain.handle('run-ffmpeg', async (event, payload) => handleRunFfmpeg(event, payload || {}));
+  ipcMain.handle('cancel-ffmpeg', async (event) => handleCancelFfmpeg(event));
 }
 
 module.exports = {
@@ -691,6 +722,7 @@ module.exports = {
   runTranslationPipeline,
   probeMedia,
   handleRunFfmpeg,
+  handleCancelFfmpeg,
   enforceOutputExtension,
   resolveModelPath,
   userDataModelsDir,

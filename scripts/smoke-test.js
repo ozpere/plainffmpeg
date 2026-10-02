@@ -192,6 +192,50 @@ async function main() {
     /from the app window/,
     'run without an IPC sender must fail cleanly'
   );
+  // stop: sender-guarded like run, idle cancel fails, and a live run dies
+  // as cancelled (never failed) with the process gone.
+  assert.strictEqual(typeof mainMod.handleCancelFfmpeg, 'function');
+  await assert.rejects(
+    mainMod.handleCancelFfmpeg(undefined),
+    /from the app window/,
+    'cancel without an IPC sender must fail cleanly'
+  );
+  {
+    const fakeSender = { send() {} };
+    const fakeEvent = { sender: fakeSender };
+    await assert.rejects(
+      mainMod.handleCancelFfmpeg(fakeEvent),
+      /No FFmpeg run in progress/,
+      'idle cancel must fail cleanly'
+    );
+    // Live kill needs the real binary and a run guaranteed longer than the
+    // pre-cancel sleep: -re throttles lavfi to realtime, so 30s of video
+    // cannot finish in ~1.2s on any machine.
+    // Only env failures skip; assertion failures still fail the suite.
+    try {
+      const ffmpeg = require('../node_modules/ffmpeg-static');
+      assert.ok(ffmpeg, 'ffmpeg binary present');
+      const out = path.join(__dirname, 'smoke-cancel.mp4');
+      const runP = mainMod.handleRunFfmpeg(fakeEvent, {
+        args: ['-y', '-re', '-f', 'lavfi', '-i', 'testsrc=duration=30:size=320x240:rate=30', '-pix_fmt', 'yuv420p', 'out.mp4'],
+        outputFile: out,
+      });
+      await new Promise((r) => setTimeout(r, 1200));
+      const cancelled = await mainMod.handleCancelFfmpeg(fakeEvent);
+      assert.strictEqual(cancelled.cancelled, true, 'cancel must acknowledge');
+      const res = await runP;
+      assert.strictEqual(res.cancelled, true, 'killed run resolves cancelled, never failed');
+      assert.strictEqual(res.ok, true);
+      fs.rmSync(out, { force: true });
+      console.log('[smoke] cancel run OK');
+    } catch (e) {
+      if (/ffmpeg-static|ENOENT|binary not available/i.test(String((e && e.message) || e))) {
+        console.log('[smoke] cancel run SKIPPED:', e.message);
+      } else {
+        throw e;
+      }
+    }
+  }
   let lt = mainMod.fixupLastTrim(
     ['-i', 'in.mp4', '-ss', '00:00:00', '-t', '00:00:05', '-vf', 'scale=-2:360', 'out.mkv'],
     'Convert to mkv, trim the last 5 seconds, make it 360p',
@@ -639,11 +683,11 @@ async function main() {
   }
 
   // preload/renderer reference matching IPC channels + error UI
-  for (const ch of ['translatePrompt', 'runFfmpeg', 'modelStatus', 'pickFile', 'pickOutput', 'probeMedia', 'outputExists', 'saveDroppedFile', 'openPath', 'downloadModel', 'windowMin', 'windowMax', 'windowClose']) {
+  for (const ch of ['translatePrompt', 'runFfmpeg', 'cancelFfmpeg', 'modelStatus', 'pickFile', 'pickOutput', 'probeMedia', 'outputExists', 'saveDroppedFile', 'openPath', 'downloadModel', 'windowMin', 'windowMax', 'windowClose']) {
     assert.ok(preload.includes(ch), `preload missing ${ch}`);
   }
   // Mirror direction: every exposed relay must have a real handler in main.
-  for (const ch of ['model-status', 'translate-prompt', 'download-model', 'pick-file', 'pick-output', 'output-exists', 'save-dropped-file', 'open-path', 'window-min', 'window-max', 'window-close', 'probe-media', 'run-ffmpeg']) {
+  for (const ch of ['model-status', 'translate-prompt', 'download-model', 'pick-file', 'pick-output', 'output-exists', 'save-dropped-file', 'open-path', 'window-min', 'window-max', 'window-close', 'probe-media', 'run-ffmpeg', 'cancel-ffmpeg']) {
     assert.ok(mainSrc.includes(`ipcMain.handle('${ch}'`), `main missing handler ${ch}`);
   }
   // Subscribers must not leak the emitter: returning ipcRenderer.on(...)
@@ -1323,6 +1367,9 @@ async function main() {
   const order = ['translateOnlyBtn', 'translateBtn', 'runBtn'].map((id) => html.indexOf(`id="${id}"`));
   assert.ok(order.every((i) => i !== -1), 'all three action buttons must exist');
   assert.ok(order[0] < order[1] && order[1] < order[2], 'buttons must be ordered Translate only, Translate & Run, Run');
+  assert.ok(html.includes('id="stopBtn"'), 'UI must have the Stop button after Run');
+  assert.ok(html.indexOf('id="stopBtn"') > html.indexOf('id="runBtn"'), 'Stop must follow Run');
+  assert.ok(renderer.includes('cancelFfmpeg'), 'renderer must wire Stop to cancel');
   console.log('[smoke] button order OK');
 
   // primary button glyph: monochrome mark, never the clashing color emoji

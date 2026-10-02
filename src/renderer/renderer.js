@@ -14,6 +14,7 @@
   const translateBtn = $('translateBtn');
   const translateOnlyBtn = $('translateOnlyBtn');
   const runBtn = $('runBtn');
+  const stopBtn = $('stopBtn');
   const cmdOut = $('cmdOut');
   const errorBanner = $('errorBanner');
   const engineNote = $('engineNote');
@@ -346,6 +347,7 @@
     engineNote.textContent = '';
     if (cmdOut) cmdOut.value = '';
     runBtn.disabled = true;
+    if (stopBtn) stopBtn.disabled = true;
     setStatus(translateStatus, 'st-idle', 'Idle');
     setStatus(ffmpegStatus, 'st-idle', 'Idle');
     paintBar(barTranslate, 0);
@@ -586,14 +588,20 @@
     runBtn.disabled = true;
     translateBtn.disabled = true;
     translateOnlyBtn.disabled = true;
+    if (stopBtn) stopBtn.disabled = false;
     paintBar(barFfmpeg, 0);
     setStatus(ffmpegStatus, 'st-active', 'Running…');
     log(`running ffmpeg → ${out}…`);
     try {
       const res = await window.api.runFfmpeg({ args, outputFile: out });
-      paintBar(barFfmpeg, 100);
-      setStatus(ffmpegStatus, 'st-done', 'Done');
-      log('done → ' + (res && res.output ? res.output : 'ok'));
+      if (res && res.cancelled) {
+        setStatus(ffmpegStatus, 'st-cancelled', 'Cancelled');
+        log('run cancelled - partial output kept.');
+      } else {
+        paintBar(barFfmpeg, 100);
+        setStatus(ffmpegStatus, 'st-done', 'Done');
+        log('done → ' + (res && res.output ? res.output : 'ok'));
+      }
     } catch (e) {
       setStatus(ffmpegStatus, 'st-failed', 'Failed');
       // Failures surface themselves: expand the collapsed-by-default logs.
@@ -603,6 +611,7 @@
       log('ffmpeg failed: ' + (e && e.message ? e.message : e));
     } finally {
       // A video switched mid-run cleared the commands - do not re-enable then.
+      if (stopBtn) stopBtn.disabled = true;
       refreshRunEnabled();
       translateBtn.disabled = false;
       translateOnlyBtn.disabled = false;
@@ -841,6 +850,16 @@
     if (res) await run();
   });
   runBtn.addEventListener('click', run);
+  if (stopBtn) stopBtn.addEventListener('click', async () => {
+    stopBtn.disabled = true;
+    try {
+      await window.api.cancelFfmpeg();
+      log('stop requested - finishing…');
+    } catch (e) {
+      log('stop unavailable: ' + (e && e.message ? e.message : e));
+      stopBtn.disabled = false;
+    }
+  });
 
   window.api.onLog((p) => { if (!p) return; log(p.line); });
   // Shared download completion: the progress event is the live path, the

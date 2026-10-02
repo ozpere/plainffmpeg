@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld('api', {
   windowClose: () => ipcRenderer.invoke('window-close'),
   probeMedia: (inputFile) => ipcRenderer.invoke('probe-media', inputFile),
   runFfmpeg: (payload) => ipcRenderer.invoke('run-ffmpeg', payload),
+  cancelFfmpeg: () => ipcRenderer.invoke('cancel-ffmpeg'),
   downloadModel: (payload) => ipcRenderer.invoke('download-model', payload || {}),
   // Subscribe helpers return an unsubscribe function - never the emitter
   // itself (returning ipcRenderer.on(...) would hand the page full
