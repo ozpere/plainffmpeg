@@ -862,8 +862,9 @@
       await window.api.cancelFfmpeg();
       log('stop requested - finishing…');
     } catch (e) {
+      // No re-enable: the run is either still stopping (its finally resets
+      // the buttons) or already over (nothing to stop).
       log('stop unavailable: ' + (e && e.message ? e.message : e));
-      stopBtn.disabled = false;
     }
   });
 

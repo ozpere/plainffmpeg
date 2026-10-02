@@ -220,6 +220,14 @@ async function main() {
         args: ['-y', '-re', '-f', 'lavfi', '-i', 'testsrc=duration=30:size=320x240:rate=30', '-pix_fmt', 'yuv420p', 'out.mp4'],
         outputFile: out,
       });
+      await assert.rejects(
+        mainMod.handleRunFfmpeg(fakeEvent, {
+          args: ['-y', '-i', 'in.mp4', 'out2.mp4'],
+          outputFile: out + '.second.mp4',
+        }),
+        /already in progress/,
+        'overlapping runs must be refused (single stoppable handle)'
+      );
       await new Promise((r) => setTimeout(r, 1200));
       const cancelled = await mainMod.handleCancelFfmpeg(fakeEvent);
       assert.strictEqual(cancelled.cancelled, true, 'cancel must acknowledge');

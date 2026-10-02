@@ -571,6 +571,9 @@ async function handleRunFfmpeg(event, { args, outputFile }) {
   if (!sender || typeof sender.send !== 'function') {
     throw new Error('run-ffmpeg must be called from the app window.');
   }
+  // Single-flight: a second direct call while one runs would orphan the
+  // first process (only the latest handle is stoppable).
+  if (runningProc) throw new Error('An FFmpeg run is already in progress.');
   const emit = (channel, payload) => {
     try { sender.send(channel, payload); } catch { /* window closed */ }
   };
