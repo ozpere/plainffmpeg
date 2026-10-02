@@ -92,7 +92,7 @@ Order is fixed in `runTranslationPipeline`:
 - Frameless window (`frame: false`), custom `#titlebar` with `#minBtn #maxBtn #closeBtn`, `-webkit-app-region: drag` with `no-drag` on controls.
 - Errors surface via `#errorBanner` + `showBanner` + `prettyLlmError`. Never `window.alert` or native `confirm`. Overwrite uses `#confirmOverlay` + `confirmOverwriteUI`; storage consent reuses the same modal via `confirmDialog`.
 - Badge flow: `unavailable > loading > ready`, plus red `error` on load failure. One loop via `scheduleRefresh` (cancels the pending poll first). Step outcomes (`#translateStatus`, `#ffmpegStatus`) go through `setStatus` into `st-idle / st-active / st-done / st-failed / st-cancelled` classes: theme colors plus a monochrome CSS `::before` mark, so Done / Failed / Cancelled read at a glance while the copy stays exactly `Idle / Translating... / Running... / Done / Failed / Cancelled`. Terminal `#terminal` starts empty and collapsed (`hidden`), log capped at 200 KB.
-- Renderer path helpers handle `/` and `\`. Preview URLs use `toFileUrl`. Drops handle `DataTransfer.files`, `items.getAsFile`, and `text/uri-list` fallback.
+- Renderer path helpers handle `/` and `\`. Preview URLs use `toFileUrl`. Drops resolve in place via `File.path` (plus `DataTransfer.items`), then the `getDroppedPath` preload relay (`webUtils.getPathForFile` - `File.path` is deprecated and arrives empty on modern Electron), then `text/uri-list`, and only pathless bytes are imported. The relay is preload-direct, not an IPC channel, so it stays out of the channel mirror lists.
 
 ## Style and copy (enforced by smoke test)
 

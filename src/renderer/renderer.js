@@ -753,7 +753,7 @@
     dragDepth = Math.max(0, dragDepth - 1);
     if (dragDepth === 0) dropzone.classList.remove('over');
   });
-  dropzone.addEventListener('drop', (e) => {
+  dropzone.addEventListener('drop', async (e) => {
     e.preventDefault();
     e.stopPropagation();
     dragDepth = 0;
@@ -771,7 +771,20 @@
     if (files.length > 0) {
       log(`drop received: ${files[0] && files[0].name ? files[0].name : '(unnamed file)'}`);
     }
-    // No path on the File object? Try the uri-list flavor…
+    // File.path is deprecated and arrives empty on modern Electron - resolve
+    // the native path via the preload relay before anything else textual.
+    if (files.length > 0 && files[0]) {
+      let native = '';
+      try {
+        native = await window.api.getDroppedPath(files[0]);
+      } catch { native = ''; }
+      if (native) {
+        log(`drop resolved via native path: ${native}`);
+        setFile(native);
+        return;
+      }
+    }
+    // Still nothing? Try the uri-list flavor…
     const viaUri = pathsFromUriList(e.dataTransfer);
     if (viaUri.length > 0) {
       log(`drop resolved via uri-list: ${viaUri[0]}`);

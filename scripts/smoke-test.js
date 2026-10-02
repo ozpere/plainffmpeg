@@ -847,6 +847,16 @@ async function main() {
   assert.ok(html.includes('id="confirmOverlay"'), 'UI must have the confirm modal');
   assert.ok(renderer.includes('diagnoseDrop'), 'drop must log flavor diagnostics');
   assert.ok(renderer.includes('arrayBuffer'), 'pathless drops must import bytes');
+  // File.path is deprecated: drops resolve the native path via webUtils in
+  // preload (direct call, not an IPC channel) before uri-list/bytes fallbacks.
+  assert.ok(preload.includes('getPathForFile'), 'preload must resolve native drop paths');
+  assert.ok(preload.includes('getDroppedPath'), 'preload must expose the drop-path relay');
+  assert.ok(renderer.includes('getDroppedPath'), 'drop must try the native path first');
+  assert.ok(renderer.includes('drop resolved via native path'), 'native resolutions must be logged');
+  assert.ok(
+    renderer.indexOf('getDroppedPath(files[0])') < renderer.indexOf('pathsFromUriList(e.dataTransfer)'),
+    'native path must precede uri-list and bytes fallbacks'
+  );
   // environment failures get plain-language hints, not bare exit codes
   assert.strictEqual(typeof mainMod.ffmpegFailureHint, 'function');
   const oomHint = mainMod.ffmpegFailureHint('x264 [error]: malloc of size 44008576 failed\nCannot allocate memory');
