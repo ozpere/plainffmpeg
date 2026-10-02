@@ -55,7 +55,7 @@ Order is fixed in `runTranslationPipeline`:
 
 1. `sanitizeModelOutput` - strip think traces/fences/backticks, rejoin lines, drop prose, require `-i`. Pure prose throws.
 2. `tokenizeArgs` - shell-aware split, preserves quotes.
-3. `fixupArgs` - rewrite invalid sizes: `-s 360p` and `scale=720p` become `scale=-2:H`. Merge into existing `-vf`; merge duplicate `-vf` chains (ffmpeg keeps only the last one).
+3. `fixupArgs` - rewrite invalid sizes: `-s 360p` and `scale=720p` become `scale=-2:H`. Merge into existing `-vf`; merge duplicate `-vf` chains (ffmpeg keeps only the last one). `fixupDedupeSeek` collapses repeated `-ss`/`-t` to the first (ffmpeg honors one seek).
 4. Filter construction (`fixupSpeed`, `fixupFps`, `fixupWidthScale`, `fixupRotate`, `fixupVolume`, `fixupGif`) - runs BEFORE conflicts so the copy+filter fix sees every filter. Speed normalizes `setpts` and derives a matching `atempo` chain (muted needs no audio side); fps caps via `fps=N`; width enforces `scale=W:-2` (W evened down, replaces other scales); rotate applies `transpose`/`hflip`/`vflip`; volume applies `-af volume=V`; gif fills `fps`/`scale` defaults, forces `-an`, and drops explicit video encoders (gif takes only its default). Exact speed numbers are also pre-computed into the prompt (`Speed: ...`).
 5. `fixupInput` - replace placeholder/missing `-i` (e.g. `input.mp4`) with the loaded video path. Existing real file is untouched.
 6. `fixupConflicts` - strip `-pass`/`-passlogfile` (single-shot runner), drop audio flags under `-an`, fix `-c:v copy` + video filters via container-aware codec (explicit remux intent drops the filters and keeps `copy` instead). Needs instruction words, not the output token.
@@ -64,8 +64,9 @@ Order is fixed in `runTranslationPipeline`:
 9. `fixupMiddleTrim` - needs `duration`. "keep/extract the middle N" keeps the center cut `[(D-N)/2, (D-N)/2+N]` via `-ss S -t N`. Exact numbers are also pre-computed into the prompt (`Center cut: ...`), same pattern as size limits.
 10. `fixupFirstTrim` - no `duration` needed. "keep the first N" keeps `[0, N]` via `-t N` (strips `-ss`); "remove the first N" keeps `[N, end]` via `-ss N` (drops `-t`).
 11. `fixupRangeTrim` - no `duration` needed. "keep from A to B" keeps `[A, B]` via `-ss A -t (B-A)`. Exact numbers are also pre-computed into the prompt (`Range: ...`).
-12. `fixupSizeLimit` - "below 2GB / under 500MB" enforces single-pass capped bitrate `-b:v Xk -maxrate Xk -bufsize 2Xk`, audio bounded to `-c:a aac -b:a 128k` (oversized `-b:a` is capped), budgeted against the speed-adjusted duration. Never two-pass. `-an` stays muted.
-13. `fixupThumbnail` - runs last: `-ss T -frames:v 1`, image container (`.png`, `.jpg` on request), drops bitrate flags and explicit video encoders. Defers seeking to a trim when one is present.
+12. `fixupNoopSeek` - no trim intent: drop `-ss 0` always and `-t` at full duration under 1x speed (model noise). Kept under speed changes (would truncate) and never eats the thumbnail seek (runs before it).
+13. `fixupSizeLimit` - "below 2GB / under 500MB" enforces single-pass capped bitrate `-b:v Xk -maxrate Xk -bufsize 2Xk`, audio bounded to `-c:a aac -b:a 128k` (oversized `-b:a` is capped), budgeted against the speed-adjusted duration. Never two-pass. `-an` stays muted.
+14. `fixupThumbnail` - runs last: `-ss T -frames:v 1`, image container (`.png`, `.jpg` on request), drops bitrate flags and explicit video encoders. Defers seeking to a trim when one is present.
 
 ## Critical invariants
 

@@ -136,6 +136,34 @@ async function main() {
   assert.deepStrictEqual(r.args, ['-i', 'in.mp4', '-vf', 'hue=s=0,scale=-2:720', 'out.mkv']);
   console.log('[smoke] fixupArgs OK');
 
+  // seek hygiene: repeated seeks collapse (ffmpeg honors one), provable
+  // no-ops drop - but never a trim window, a slowed duration, or the still.
+  assert.strictEqual(typeof mainMod.fixupDedupeSeek, 'function');
+  assert.strictEqual(typeof mainMod.fixupNoopSeek, 'function');
+  assert.strictEqual(fixupsMod.fixupDedupeSeek, mainMod.fixupDedupeSeek, 'fixups must be the same functions main re-exports');
+  assert.strictEqual(fixupsMod.fixupNoopSeek, mainMod.fixupNoopSeek, 'fixups must be the same functions main re-exports');
+  let dq = mainMod.fixupDedupeSeek(['-i', 'in.mp4', '-ss', '27.5', '-ss', '2', '-t', '5', 'out.mp4']);
+  assert.deepStrictEqual(dq.args, ['-i', 'in.mp4', '-ss', '27.5', '-t', '5', 'out.mp4']);
+  assert.strictEqual(dq.corrections.length, 1, 'must report the dropped duplicate');
+  dq = mainMod.fixupDedupeSeek(['-i', 'in.mp4', '-ss', '5', '-t', '5', '-t', '9', 'out.mp4']);
+  assert.deepStrictEqual(dq.args, ['-i', 'in.mp4', '-ss', '5', '-t', '5', 'out.mp4']);
+  dq = mainMod.fixupDedupeSeek(['-i', 'in.mp4', '-ss', '5', 'out.mp4']);
+  assert.deepStrictEqual(dq.args, ['-i', 'in.mp4', '-ss', '5', 'out.mp4']);
+  assert.strictEqual(dq.corrections.length, 0, 'single seeks untouched');
+  let nq = mainMod.fixupNoopSeek(['-i', 'in.mp4', '-ss', '0', '-t', '30', 'out.mp4'], 'convert to mp4', 30);
+  assert.deepStrictEqual(nq.args, ['-i', 'in.mp4', 'out.mp4']);
+  assert.strictEqual(nq.corrections.length, 2, 'both no-ops reported');
+  // trim intent owns the window: no stripping, even of 0-ish values.
+  nq = mainMod.fixupNoopSeek(['-i', 'in.mp4', '-ss', '0', '-t', '5', 'out.mp4'], 'keep the first 5 seconds', 30);
+  assert.deepStrictEqual(nq.args, ['-i', 'in.mp4', '-ss', '0', '-t', '5', 'out.mp4']);
+  // slowed output makes a full-duration -t a truncation, not a no-op.
+  nq = mainMod.fixupNoopSeek(['-i', 'in.mp4', '-ss', '0', '-t', '60', 'out.mp4'], 'slow motion', 60);
+  assert.deepStrictEqual(nq.args, ['-i', 'in.mp4', '-t', '60', 'out.mp4']);
+  assert.strictEqual(nq.corrections.length, 1, 'only the -ss 0 goes');
+  nq = mainMod.fixupNoopSeek(['-i', 'in.mp4', '-t', '25', 'out.mp4'], 'convert to mp4', 30);
+  assert.deepStrictEqual(nq.args, ['-i', 'in.mp4', '-t', '25', 'out.mp4'], 'partial -t untouched');
+  console.log('[smoke] seek hygiene OK');
+
   // input fixup: a literal "-i input.mp4" (or any missing file) must be
   // replaced with the loaded video.
   assert.strictEqual(typeof mainMod.fixupInput, 'function');

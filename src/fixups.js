@@ -313,6 +313,28 @@ function dropTimeFlag(out, flag) {
   return true;
 }
 
+// Repeated seeks: ffmpeg silently honors one of them (the last -ss wins for
+// output seeking), so a doubled flag means a wrong window with no error.
+// Keep the first occurrence - trim layers below normalize it when the
+// instruction names a window - and report every dropped duplicate.
+function fixupDedupeSeek(args) {
+  const corrections = [];
+  if (!Array.isArray(args)) return { args, corrections };
+  const out = [...args];
+  for (const flag of ['-ss', '-t']) {
+    let seen = false;
+    for (let i = 0; i < out.length;) {
+      if (out[i] !== flag) { i++; continue; }
+      if (!seen) { seen = true; i++; continue; }
+      const nx = out[i + 1];
+      const val = nx !== undefined && !String(nx).startsWith('-') ? ` ${nx}` : '';
+      out.splice(i, val ? 2 : 1);
+      corrections.push(`Dropped duplicate "${flag}${val}" (repeated seeks keep only one window)`);
+    }
+  }
+  return { args: out, corrections };
+}
+
 // Append a filter to the single video/audio chain, creating it if missing.
 function appendVideoFilter(out, filter) {
   const i = out.findIndex((t) => t === '-vf' || t === '-filter:v');
@@ -635,6 +657,34 @@ function fixupRangeTrim(args, instruction) {
     changed = true;
   }
   if (changed) corrections.push(`"seconds ${intent.rawA}-${intent.rawB}" - keeping [${wantSs}s, ${fmtSec(b)}s]`);
+  return { args: out, corrections };
+}
+
+// Provable no-op seeks with no trim intent behind them: `-ss 0` seeks
+// nowhere, and `-t <full duration>` at 1x speed caps nothing. Both are model
+// noise - except under a speed change, where `-t` truncates the stretched
+// output, so a non-1x factor keeps it. Runs after the trim layers (they own
+// intentional windows) and before the thumbnail (which owns its own `-ss`).
+function fixupNoopSeek(args, instruction, durationSec) {
+  const corrections = [];
+  if (!Array.isArray(args)) return { args, corrections };
+  const intent = parseTrimIntent(instruction);
+  if (intent.kind !== 'none') return { args, corrections };
+  const out = [...args];
+  const f = getTimeFlags(out);
+  if (f.ssIdx !== -1 && f.ssVal !== null && Math.abs(f.ssVal) < 0.005) {
+    out.splice(f.ssIdx, 2);
+    corrections.push('Dropped `-ss 0` (seeks nowhere)');
+  }
+  const speedX = parseSpeedFactor(instruction);
+  if (durationSec > 0 && (!speedX || speedX === 1)) {
+    const g = getTimeFlags(out);
+    if (g.tIdx !== -1 && timesApprox(g.tVal, durationSec, 0.51)) {
+      const val = out[g.tIdx + 1];
+      out.splice(g.tIdx, 2);
+      corrections.push(`Dropped "-t ${val}" (covers the whole video)`);
+    }
+  }
   return { args: out, corrections };
 }
 
@@ -1080,6 +1130,7 @@ function runTranslationPipeline(tokens, context) {
   const { instruction, inputFile, duration } = context || {};
   const steps = [
     (a) => fixupArgs(a),
+    (a) => fixupDedupeSeek(a),
     (a) => fixupSpeed(a, instruction),
     (a) => fixupFps(a, instruction),
     (a) => fixupWidthScale(a, instruction),
@@ -1093,6 +1144,7 @@ function runTranslationPipeline(tokens, context) {
     (a) => fixupMiddleTrim(a, instruction, duration),
     (a) => fixupFirstTrim(a, instruction, duration),
     (a) => fixupRangeTrim(a, instruction),
+    (a) => fixupNoopSeek(a, instruction, duration),
     (a) => fixupSizeLimit(a, instruction, duration),
     (a) => fixupThumbnail(a, instruction, duration),
   ];
@@ -1135,6 +1187,8 @@ module.exports = {
   fixupMiddleTrim,
   fixupFirstTrim,
   fixupRangeTrim,
+  fixupDedupeSeek,
+  fixupNoopSeek,
   fixupSpeed,
   fixupFps,
   fixupWidthScale,

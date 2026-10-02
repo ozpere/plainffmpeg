@@ -279,6 +279,28 @@ const TRANSLATE_CASES = [
     modelRaw: '-i input.mp4 clip-out.mp4',
     expectedArgs: ['-i', '/v/clip.mp4', '-ss', '10', '-t', '10', 'clip-out.mp4'],
   },
+  {
+    name: 'duplicate seek collapses before trim',
+    instruction: 'keep the last 5 seconds',
+    duration: 27.49,
+    modelRaw: '-i input.mp4 -ss 10 -ss 22.49 clip-out.mp4',
+    expectedArgs: ['-i', '/v/clip.mp4', '-ss', '22.49', 'clip-out.mp4'],
+  },
+  {
+    name: 'no-op seeks dropped without trim intent',
+    instruction: 'convert to mp4',
+    duration: 30,
+    modelRaw: '-i input.mp4 -ss 0 -t 30 -c:v libx264 clip-out.mp4',
+    expectedArgs: ['-i', '/v/clip.mp4', '-c:v', 'libx264', 'clip-out.mp4'],
+  },
+  {
+    name: 'full-duration -t kept under slow motion',
+    instruction: 'slow motion, below 100MB',
+    duration: 60,
+    modelRaw: '-i input.mp4 -vf setpts=2*PTS -af atempo=0.5 -ss 0 -t 60 -c:v libx264 -c:a aac clip-out.mp4',
+    expectedArgs: ['-i', '/v/clip.mp4', '-vf', 'setpts=2*PTS', '-af', 'atempo=0.5', '-t', '60', '-c:v', 'libx264', '-c:a', 'aac',
+      '-b:v', '6722k', '-maxrate', '6722k', '-bufsize', '13444k', 'clip-out.mp4'],
+  },
 ];
 
 module.exports = { TRANSLATE_CASES };
