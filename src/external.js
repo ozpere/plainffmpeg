@@ -29,8 +29,11 @@ function normalizeBaseUrl(v) {
   return s;
 }
 
-function presetById(id) {
-  return EXTERNAL_PRESETS.find((p) => p.id === String(id || '')) || null;
+function encryptionAvailable(ss) {
+  // Linux without a keyring exposes the API but cannot encrypt - check first.
+  if (!ss || typeof ss.encryptString !== 'function' || typeof ss.decryptString !== 'function') return false;
+  if (typeof ss.isEncryptionAvailable === 'function' && !ss.isEncryptionAvailable()) return false;
+  return true;
 }
 
 // Same message shape the local engine uses: system rules + user task.
@@ -188,7 +191,7 @@ function readFullConfig() {
     const dir = externalConfigDir();
     const enc = fs.readFileSync(path.join(dir, 'external-key.bin'));
     const ss = safeStorage();
-    if (!ss || typeof ss.decryptString !== 'function') {
+    if (!encryptionAvailable(ss)) {
       throw new Error('OS key storage is unavailable in this context.');
     }
     const apiKey = ss.decryptString(enc);
@@ -209,7 +212,7 @@ function saveExternalConfig({ baseUrl, model, apiKey, presetId } = {}) {
   const key = String(apiKey || '').trim();
   if (!key) throw new Error('Settings need an API key.');
   const ss = safeStorage();
-  if (!ss || typeof ss.encryptString !== 'function') {
+  if (!encryptionAvailable(ss)) {
     throw new Error('OS key storage is unavailable in this context.');
   }
   const fs = require('fs');
@@ -235,7 +238,6 @@ module.exports = {
   EXTERNAL_TIMEOUT_MS,
   EXTERNAL_PRESETS,
   normalizeBaseUrl,
-  presetById,
   buildExternalMessages,
   parseOpenAIContent,
   externalErrorHint,

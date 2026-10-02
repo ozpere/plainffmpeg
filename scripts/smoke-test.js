@@ -746,6 +746,11 @@ async function main() {
     assert.strictEqual(uncfg.errorKind, 'external-failed', 'external failures classify distinctly');
     assert.strictEqual(uncfg.engine, 'external');
     assert.ok(typeof uncfg.hint === 'string' && uncfg.hint.length > 0, 'external failure must carry a hint');
+    await assert.rejects(
+      mainMod.handleTestExternal(),
+      /not set up/,
+      'test without setup must fail cleanly too'
+    );
   }
   console.log('[smoke] external engine OK');
 

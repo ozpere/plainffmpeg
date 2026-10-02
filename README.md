@@ -1,6 +1,6 @@
 # <img src="assets/logo.png" alt="logo" width="32" height="32"> PlainFFmpeg
 
-Self-contained video editor using plain English - describe the edit, the app translates it into an FFmpeg command with a local LLM and runs it. 100% offline: no Ollama, no Python, no cloud, no accounts.
+Self-contained video editor using plain English - describe the edit, the app translates it into an FFmpeg command with a local LLM and runs it. Offline by default: no Ollama, no Python, no accounts (an optional BYOK cloud engine lives in settings).
 
 ## How it works
 

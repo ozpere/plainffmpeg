@@ -585,7 +585,7 @@
     runBtn.disabled = true;
     paintBar(barTranslate, null);
     setStatus(translateStatus, 'st-active', 'Translating…');
-    log(`translating (${engineChoice}) : "${text}" …`);
+    log(`translating [${engineChoice}]: "${text}" …`);
     try {
       const res = await window.api.translatePrompt({ instruction: text, inputFile, duration: mediaDuration, width: mediaWidth, height: mediaHeight, engine: engineChoice });
       if (!res || res.ok === false) {
@@ -899,6 +899,11 @@
       if (s) {
         if (s.baseUrl && !extBaseUrl.value) extBaseUrl.value = s.baseUrl;
         if (s.model && !extModel.value) extModel.value = s.model;
+        if (s.presetId && extPreset) {
+          for (const o of extPreset.options) {
+            if (o.value === s.presetId) { extPreset.value = s.presetId; break; }
+          }
+        }
       }
       try { extBaseUrl.focus(); } catch { /* ignore */ }
     }
@@ -919,13 +924,6 @@
         presetId: (extPreset && extPreset.value) || '',
         apiKey: (extKey.value || '').trim(),
       };
-      if (!payload.apiKey) {
-        const cur = await window.api.getExternalConfig();
-        if (cur && cur.configured) {
-          setExtStatus('Key field is blank - retype the key to save, or Test the saved one.');
-          return;
-        }
-      }
       const res = await window.api.setExternalConfig(payload);
       if (res && res.configured) {
         extKey.value = '';

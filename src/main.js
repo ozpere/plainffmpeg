@@ -495,7 +495,15 @@ function handleGetExternalConfig() {
 }
 
 async function handleSetExternalConfig(payload) {
-  const saved = external.saveExternalConfig(payload || {});
+  const p = { ...(payload || {}) };
+  // Blank key field means "keep the saved one" - reuse it so base URL and
+  // model edits do not force a retype.
+  if (!String(p.apiKey || '').trim()) {
+    const full = external.readFullConfig();
+    if (!full.configured) throw new Error('Settings need an API key.');
+    p.apiKey = full.apiKey;
+  }
+  const saved = external.saveExternalConfig(p);
   return { ok: true, ...saved };
 }
 

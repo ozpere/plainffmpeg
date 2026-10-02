@@ -1,6 +1,6 @@
 # PlainFFmpeg - Agent Guide
 
-Self-contained offline Electron video editor. Plain English instruction is translated to FFmpeg args by a local GGUF model (`Qwen3-1.7B` via `node-llama-cpp`), corrected by deterministic layers, then run via bundled `ffmpeg-static`. 100% offline: no Ollama, no Python, no cloud, no accounts.
+Self-contained offline-first Electron video editor. Plain English instruction is translated to FFmpeg args by a local GGUF model (`Qwen3-1.7B` via `node-llama-cpp`), corrected by deterministic layers, then run via bundled `ffmpeg-static`. Offline by default: no Ollama, no Python, no accounts (optional BYOK external engine in settings).
 
 ## Stack
 
