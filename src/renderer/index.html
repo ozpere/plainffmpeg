@@ -24,7 +24,11 @@
       <p class="sub">100% offline · on-device LLM · no cloud, no accounts.</p>
     </div>
   </div>
-  <div id="engineBadge" class="badge warn" aria-live="polite">checking engine…</div>
+  <div class="header-engine">
+    <div id="engineBadge" class="badge warn" aria-live="polite">checking engine…</div>
+    <button id="extPillBtn" type="button" class="badge badge-btn" disabled title="Set up your key first (gear icon)">Use external AI</button>
+    <button id="extGearBtn" type="button" class="ghost gear-btn" aria-label="External AI settings" title="External AI settings">⚙</button>
+  </div>
 </header>
 
 <main>
@@ -54,42 +58,6 @@
   <section class="prompt-row">
     <label for="instruction">Instruction in plain English</label>
     <input id="instruction" type="text" placeholder='e.g. "Convert to mp4, trim the last 5 seconds, make it 360p"' />
-  </section>
-
-  <section class="prompt-row">
-    <label for="engineSel">Translation engine</label>
-    <div class="output-row">
-      <select id="engineSel">
-        <option value="local">Local AI (offline, on-device)</option>
-        <option value="external">External AI (your own key)</option>
-      </select>
-      <button id="extSettingsBtn" type="button">External AI settings…</button>
-    </div>
-  </section>
-
-  <section id="extCard" class="card model-dl" hidden>
-    <div class="model-dl-text">
-      <strong>External AI (optional, your key)</strong>
-      <span class="hint">Sends only the instruction text, file name, duration and resolution to the provider - never file bytes. Needs a free key from the provider (email signup, no card). Local stays the default.</span>
-    </div>
-    <label for="extPreset">Provider preset</label>
-    <select id="extPreset">
-      <option value="groq">Groq</option>
-      <option value="openrouter">OpenRouter</option>
-      <option value="custom">Custom…</option>
-    </select>
-    <label for="extBaseUrl">Base URL (OpenAI-compatible)</label>
-    <input id="extBaseUrl" type="text" spellcheck="false" placeholder="https://api.groq.com/openai/v1" />
-    <label for="extModel">Model</label>
-    <input id="extModel" type="text" spellcheck="false" placeholder="llama-3.3-70b-versatile" />
-    <label for="extKey">API key (stored in the OS keychain)</label>
-    <input id="extKey" type="password" autocomplete="off" spellcheck="false" placeholder="Paste key - leave blank to keep the saved one" />
-    <div class="btn-row ext-actions">
-      <button id="extSaveBtn" type="button" class="primary">Save</button>
-      <button id="extTestBtn" type="button">Test</button>
-      <button id="extClearBtn" type="button">Forget key</button>
-    </div>
-    <span id="extStatus" class="progress-status" aria-live="polite"></span>
   </section>
 
   <section class="prompt-row">
@@ -145,6 +113,33 @@
     <div class="modal-actions">
       <button id="confirmCancel" type="button">Cancel</button>
       <button id="confirmOk" type="button" class="primary">Overwrite</button>
+    </div>
+  </div>
+</div>
+
+<!-- Same outside-<main> rule: settings form parks the page while open. -->
+<div id="extModalOverlay" class="overlay" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="extModalTitle" aria-describedby="extModalDesc">
+    <h2 id="extModalTitle">External AI (optional, your key)</h2>
+    <p id="extModalDesc" class="hint">Sends only the instruction text, file name, duration and resolution to the provider - never file bytes. Needs a key from the provider (free tier works - email signup, no card). Local stays the default.</p>
+    <label for="extPreset">Provider preset</label>
+    <select id="extPreset">
+      <option value="groq">Groq</option>
+      <option value="openrouter">OpenRouter</option>
+      <option value="custom">Custom…</option>
+    </select>
+    <label for="extBaseUrl">Base URL (OpenAI-compatible)</label>
+    <input id="extBaseUrl" type="text" spellcheck="false" placeholder="https://api.groq.com/openai/v1" />
+    <label for="extModel">Model</label>
+    <input id="extModel" type="text" spellcheck="false" placeholder="llama-3.3-70b-versatile" />
+    <label for="extKey">API key (stored in the OS keychain)</label>
+    <input id="extKey" type="password" autocomplete="off" spellcheck="false" placeholder="Paste key - leave blank to keep the saved one" />
+    <span id="extStatus" class="progress-status" aria-live="polite"></span>
+    <div class="modal-actions">
+      <button id="extClearBtn" type="button">Forget key</button>
+      <button id="extTestBtn" type="button">Test</button>
+      <button id="extSaveBtn" type="button" class="primary">Save</button>
+      <button id="extCloseBtn" type="button">Close</button>
     </div>
   </div>
 </div>

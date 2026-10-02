@@ -10,24 +10,26 @@ Self-contained video editor using plain English - describe the edit, the app tra
    translates it to FFmpeg arguments, which run through a bundled
    `ffmpeg-static` binary with live logs.
 4. If the translation looks wrong, edit it right in *Translated FFmpeg command (editable)* - edits run as-is (only `-y` plus the container extension are enforced) and need `-i`.
-5. The local model is small - for harder requests, switch the engine to *External AI* and use your own provider key (Groq, OpenRouter, or any OpenAI-compatible endpoint). See below.
+5. The local model is small - for harder requests, use the *Use external AI* pill in the header with your own provider key (Groq, OpenRouter, or any OpenAI-compatible endpoint). See below.
 
 ## External AI (optional, your key)
 
 Local-first: the bundled GGUF model is the default and the app works fully
-offline with it. If its translations disappoint, the engine dropdown offers
+offline with it. If its translations disappoint, the header pill offers
 *External AI*: the same prompt (instruction, file name, duration,
 resolution) is sent to an OpenAI-compatible `/chat/completions` endpoint and
 the answer runs through the same deterministic fixups. File bytes never leave
 your machine.
 
-Setup: pick *External AI*, open *External AI settings*, choose a preset
+Setup: click the gear next to the engine badge, choose a preset
 (Groq, OpenRouter, or Custom), enter the base URL + model + API key, Save,
-then Test. Each provider has a free tier - sign up with an email (no card)
-and paste your own key; no keys are bundled. The key is stored in the OS
-keychain (per-user app data, or next to the exe for portable runs) and never
-appears in logs. External failures (bad key, rate limit, timeout) surface as
-plain errors - the app never silently falls back and runs a guessed command.
+then Test. The pill stays disabled until a key is saved; clicking it toggles
+between local and external. Each provider has a free tier - sign up with an
+email (no card) and paste your own key; no keys are bundled. The key is stored
+in the OS keychain (per-user app data, or next to the exe for portable runs)
+and never appears in logs. External failures (bad key, rate limit, timeout)
+surface as plain errors - the app never silently falls back and runs a guessed
+command.
 
 LLM problems never run a guessed command - they surface as a clear error
 instead. No silent fallbacks, anywhere.
@@ -110,8 +112,8 @@ src/
   external.js          Optional BYOK engine (OpenAI-compatible) + OS-keychain settings
   preload.js           Minimal context-bridge API (sandboxed renderer)
   renderer/
-    index.html         UI structure, model download card, open-folder shortcut, editable command box, engine selector
-    renderer.js        UI logic (load → probe → translate → run, model download, editable command box, external settings)
+    index.html         UI structure, model download card, open-folder shortcut, editable command box, header engine cluster
+    renderer.js        UI logic (load → probe → translate → run, model download, editable command box, external pill + settings modal)
     styles.css         Warm-charcoal theme
 scripts/
   download-model.js    GGUF fetcher (Hugging Face, resumable, format-checked)

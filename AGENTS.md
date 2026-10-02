@@ -36,8 +36,8 @@ src/paths.js             On-disk locations: model resolution, portable dirs, MSV
 src/llm.js               Local GGUF engine: SYSTEM_PROMPT, session state, diagnostics. No Electron; orchestrated by main.js.
 src/external.js          Optional BYOK engine: OpenAI-compatible caller, presets, OS-keychain settings. No Electron; orchestrated by main.js.
 src/preload.js           contextBridge API, must mirror IPC channels 1:1
-src/renderer/renderer.js UI logic: load, probe, translate, run, drag-drop, modals, badges, model download, editable command box, engine selector + external settings
-src/renderer/index.html  UI structure, frameless titlebar, split progress bars, model download card, editable #cmdOut, #engineSel + #extCard
+src/renderer/renderer.js UI logic: load, probe, translate, run, drag-drop, modals, badges, model download, editable command box, external pill + settings modal
+src/renderer/index.html  UI structure, frameless titlebar, split progress bars, model download card, editable #cmdOut, header engine cluster (#extPillBtn + gear + #extModalOverlay)
 src/renderer/styles.css  Warm-charcoal theme, no gradients
 scripts/download-model.js GGUF fetcher, resumable (TARGET is models/model.gguf, shared by main via downloadTo)
 scripts/fetch-vc-redist.js MSVC redist fetcher for the installer (not committed)

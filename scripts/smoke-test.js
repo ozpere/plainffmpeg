@@ -891,10 +891,23 @@ async function main() {
   assert.ok(!html.includes('id="cmdEdit"'), 'separate override field must be gone');
   assert.ok(!renderer.includes('cmdEdit'), 'renderer must not reference the old field');
   assert.ok(renderer.includes('tokenizeCustomCommand'), 'box edits must tokenize quoted paths');
-  // engine selector: local default, external opt-in with its own settings.
-  assert.ok(html.includes('id="engineSel"'), 'UI must have the engine selector');
-  assert.ok(html.includes('id="extCard"'), 'UI must have the external settings card');
+  // header engine cluster: status badge plus external toggle pill and gear.
+  // No in-flow selector or settings card - setup lives in the gear modal.
+  assert.ok(html.includes('id="extPillBtn"'), 'UI must have the external toggle pill');
+  assert.ok(html.includes('id="extGearBtn"'), 'UI must have the settings gear');
+  assert.ok(!html.includes('id="engineSel"'), 'in-flow engine selector must be gone');
+  assert.ok(!html.includes('id="extCard"'), 'in-flow settings card must be gone');
+  assert.ok(!renderer.includes('engineSel') && !renderer.includes('extCard'), 'renderer must not reference the removed flow');
+  assert.ok(html.includes('id="extModalOverlay"'), 'UI must have the settings modal');
   assert.ok(html.includes('id="extKey"'), 'settings must have a key field');
+  assert.ok(
+    html.indexOf('id="extModalOverlay"') > html.indexOf('</main>'),
+    'settings modal must live outside <main> like the confirm modal'
+  );
+  assert.ok(html.includes('aria-labelledby="extModalTitle"'), 'settings modal must label itself');
+  assert.ok(renderer.includes('parkChrome') && renderer.includes('unparkChrome'), 'modals must share the park helpers');
+  assert.ok(renderer.includes('refreshExtPill'), 'pill must follow setup state');
+  assert.ok(renderer.includes('Set up your key first'), 'unconfigured pill must explain itself');
   assert.ok(renderer.includes("engine: engineChoice"), 'translate must forward the chosen engine');
   assert.ok(renderer.includes('External AI is not set up yet'), 'missing setup must have plain copy');
   assert.ok(renderer.includes('rate-limited this key'), 'rate limits must have plain copy');
@@ -1407,6 +1420,7 @@ async function main() {
   assert.ok(/\.badge\.ready\s*{[^}]*#bfe3b8/i.test(css), 'ready badge must be pastel green');
   assert.ok(/\.badge\.error\s*{[^}]*#f2b8b0/i.test(css), 'error badge must be pastel red');
   assert.ok(css.includes('.overlay') && css.includes('.modal'), 'modal styles must exist');
+  assert.ok(css.includes('.header-engine') && css.includes('.badge-btn'), 'header cluster styles must exist');
   // accessibility: failures announced, progress exposed, modal contained.
   assert.ok(html.includes('role="alert"'), 'error banner must announce');
   assert.ok(html.includes('aria-live="polite"'), 'statuses must announce politely');

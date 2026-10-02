@@ -40,9 +40,10 @@
   const closeBtn = $('closeBtn');
   const titlebar = $('titlebar');
   const terminal = $('terminal');
-  const engineSel = $('engineSel');
-  const extSettingsBtn = $('extSettingsBtn');
-  const extCard = $('extCard');
+  const extPillBtn = $('extPillBtn');
+  const extGearBtn = $('extGearBtn');
+  const extModalOverlay = $('extModalOverlay');
+  const extCloseBtn = $('extCloseBtn');
   const extPreset = $('extPreset');
   const extBaseUrl = $('extBaseUrl');
   const extModel = $('extModel');
@@ -291,6 +292,20 @@
     confirmQueue = task.then(() => undefined, () => undefined);
     return task;
   }
+  // Park background interaction and remember focus: Tab stays inside
+  // the open modal, and focus returns where it was afterwards. Shared by
+  // every modal (confirm prompt, external AI settings).
+  function parkChrome() {
+    const previouslyFocused = document.activeElement;
+    const chrome = [document.querySelector('header'), document.querySelector('main'), document.getElementById('titlebar')];
+    for (const el of chrome) { if (el) { try { el.inert = true; } catch { /* ignore */ } } }
+    return { previouslyFocused, chrome };
+  }
+  function unparkChrome(parked) {
+    const { previouslyFocused, chrome } = parked || {};
+    for (const el of chrome || []) { if (el) { try { el.inert = false; } catch { /* ignore */ } } }
+    try { if (previouslyFocused && previouslyFocused.focus) previouslyFocused.focus(); } catch { /* ignore */ }
+  }
   function showConfirmDialog({ title, message, okLabel }) {
     // Resolves true on action, false on Cancel / Esc / backdrop click.
     return new Promise((resolve) => {
@@ -298,19 +313,14 @@
       confirmMsg.textContent = message;
       confirmOk.textContent = okLabel;
       confirmOverlay.hidden = false;
-      // Park background interaction and remember focus: Tab stays inside
-      // the modal, and focus returns where it was afterwards.
-      const previouslyFocused = document.activeElement;
-      const chrome = [document.querySelector('header'), document.querySelector('main'), document.getElementById('titlebar')];
-      for (const el of chrome) { if (el) { try { el.inert = true; } catch { /* ignore */ } } }
+      const parked = parkChrome();
       const done = (v) => {
         confirmOverlay.hidden = true;
-        for (const el of chrome) { if (el) { try { el.inert = false; } catch { /* ignore */ } } }
+        unparkChrome(parked);
         confirmOk.removeEventListener('click', onOk);
         confirmCancel.removeEventListener('click', onCancel);
         window.removeEventListener('keydown', onKey);
         confirmOverlay.removeEventListener('click', onBackdrop);
-        try { if (previouslyFocused && previouslyFocused.focus) previouslyFocused.focus(); } catch { /* ignore */ }
         resolve(v);
       };
       const onOk = () => done(true);
@@ -512,23 +522,51 @@
   }
 
   // Translation engine: local GGUF stays the default; External uses the
-  // user's own key against any OpenAI-compatible endpoint. Persist the choice
-  // locally; the key itself never leaves the OS keychain.
+  // user's own key against any OpenAI-compatible endpoint. The header pill
+  // toggles between them (persisted locally); the key itself never leaves
+  // the OS keychain. The pill stays disabled until a key is configured.
   let engineChoice = 'local';
-  let extCardOpen = false;
+  let extConfigured = false;
   try {
     if (window.localStorage) engineChoice = window.localStorage.getItem('pfm-engine') || 'local';
   } catch { engineChoice = 'local'; }
   if (engineChoice !== 'external') engineChoice = 'local';
 
+  function paintExtPill() {
+    if (!extPillBtn) return;
+    extPillBtn.disabled = !extConfigured;
+    extPillBtn.title = extConfigured
+      ? (engineChoice === 'external' ? 'Using external AI - click for local' : 'Use external AI instead of local')
+      : 'Set up your key first (gear icon)';
+    extPillBtn.textContent = engineChoice === 'external' ? 'Using external AI' : 'Use external AI';
+    extPillBtn.classList.toggle('armed', engineChoice === 'external');
+  }
+
   function setEngine(v) {
-    engineChoice = v === 'external' ? 'external' : 'local';
+    engineChoice = v === 'external' && extConfigured ? 'external' : 'local';
     try {
       if (window.localStorage) window.localStorage.setItem('pfm-engine', engineChoice);
     } catch { /* private mode */ }
-    if (engineSel) engineSel.value = engineChoice;
-    if (extCard) extCard.hidden = engineChoice !== 'external' && !extCardOpen;
-    if (engineChoice === 'external') refreshExternalStatus();
+    paintExtPill();
+  }
+
+  // Reads setup state (never the key) and paints the pill. Disarms to local
+  // when the key is gone so translate can never target a missing setup.
+  async function refreshExtPill() {
+    try {
+      const s = await window.api.getExternalConfig();
+      extConfigured = !!(s && s.configured);
+    } catch {
+      extConfigured = false;
+    }
+    if (!extConfigured && engineChoice === 'external') {
+      engineChoice = 'local';
+      try {
+        if (window.localStorage) window.localStorage.setItem('pfm-engine', engineChoice);
+      } catch { /* ignore */ }
+    }
+    paintExtPill();
+    return extConfigured;
   }
 
   function setExtStatus(text, isError) {
@@ -560,6 +598,48 @@
       setExtStatus('Could not read settings: ' + (e && e.message ? e.message : e), true);
       return null;
     }
+  }
+
+  // Settings modal: same open/close contract as the confirm modal (parked
+  // background, restored focus, Esc/backdrop close). Field wiring unchanged.
+  function openExtModal() {
+    if (!extModalOverlay) return;
+    extModalOverlay.hidden = false;
+    const parked = parkChrome();
+    refreshExternalStatus().then((s) => {
+      if (s) {
+        if (s.baseUrl && !extBaseUrl.value) extBaseUrl.value = s.baseUrl;
+        if (s.model && !extModel.value) extModel.value = s.model;
+        if (s.presetId && extPreset) {
+          for (const o of extPreset.options) {
+            if (o.value === s.presetId) { extPreset.value = s.presetId; break; }
+          }
+        }
+      }
+    });
+    const done = () => {
+      extModalOverlay.hidden = true;
+      unparkChrome(parked);
+      window.removeEventListener('keydown', onKey);
+      extModalOverlay.removeEventListener('click', onBackdrop);
+      extCloseBtn.removeEventListener('click', onClose);
+    };
+    const onClose = () => done();
+    const onKey = (e) => {
+      if (e.key === 'Escape') { done(); return; }
+      if (e.key === 'Tab') {
+        const order = [extPreset, extBaseUrl, extModel, extKey, extClearBtn, extTestBtn, extSaveBtn, extCloseBtn].filter(Boolean);
+        const first = order[0];
+        const last = order[order.length - 1];
+        if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+        else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+      }
+    };
+    const onBackdrop = (e) => { if (e.target === extModalOverlay) done(); };
+    window.addEventListener('keydown', onKey);
+    extModalOverlay.addEventListener('click', onBackdrop);
+    extCloseBtn.addEventListener('click', onClose);
+    try { (extBaseUrl || extCloseBtn).focus(); } catch { /* ignore */ }
   }
 
   async function translate() {
@@ -890,24 +970,10 @@
   });
 
   translateOnlyBtn.addEventListener('click', translate);
-  if (engineSel) engineSel.addEventListener('change', () => setEngine(engineSel.value));
-  if (extSettingsBtn) extSettingsBtn.addEventListener('click', async () => {
-    extCardOpen = !extCard.hidden;
-    extCard.hidden = !extCardOpen;
-    if (extCardOpen) {
-      const s = await refreshExternalStatus();
-      if (s) {
-        if (s.baseUrl && !extBaseUrl.value) extBaseUrl.value = s.baseUrl;
-        if (s.model && !extModel.value) extModel.value = s.model;
-        if (s.presetId && extPreset) {
-          for (const o of extPreset.options) {
-            if (o.value === s.presetId) { extPreset.value = s.presetId; break; }
-          }
-        }
-      }
-      try { extBaseUrl.focus(); } catch { /* ignore */ }
-    }
+  if (extPillBtn) extPillBtn.addEventListener('click', () => {
+    setEngine(engineChoice === 'external' ? 'local' : 'external');
   });
+  if (extGearBtn) extGearBtn.addEventListener('click', () => openExtModal());
   if (extPreset) extPreset.addEventListener('change', () => {
     const id = extPreset.value;
     if (id && id !== 'custom') {
@@ -929,6 +995,7 @@
         extKey.value = '';
         setExtStatus(`Saved: ${(res.baseUrl || '').replace(/^https?:\/\//, '')} / ${res.model || ''}`);
         log('external AI settings saved (key stays in the OS keychain).');
+        refreshExtPill();
       } else {
         setExtStatus('Save failed: ' + ((res && res.error) || 'unknown error'), true);
       }
@@ -963,6 +1030,8 @@
     if (extKey) extKey.value = '';
     setExtStatus('Key forgotten - external engine is unset.');
     log('external AI settings cleared.');
+    setEngine('local');
+    refreshExtPill();
   });
   if (cmdOut) cmdOut.addEventListener('input', () => {
     clearError();
@@ -1105,7 +1174,7 @@
   });
 
   refreshOutputDisplay();
-  if (engineSel) engineSel.value = engineChoice;
-  if (extCard) extCard.hidden = engineChoice !== 'external';
+  paintExtPill();
+  refreshExtPill();
   refreshStatus();
 })();
