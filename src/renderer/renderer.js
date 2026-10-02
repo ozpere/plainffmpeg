@@ -113,14 +113,15 @@
   }
 
   // Default output: same directory as the input, named `output.<ext>`.
-  // <ext> comes from the translated command; until translated it is
-  // literally `output.ext` - we never guess a container upfront.
+  // <ext> comes from the effective command (box edits or translation);
+  // until either exists it is literally `output.ext` - never guessed.
   function defaultOutput() {
     if (!inputFile) return '';
     let ext = '.ext';
-    if (lastArgs && lastArgs.length > 0) {
-      const last = String(lastArgs[lastArgs.length - 1]);
-      // Only a translated *output* determines the container - the input
+    const eff = effectiveArgs();
+    if (eff && eff.length > 0) {
+      const last = String(eff[eff.length - 1]);
+      // Only a real *output* determines the container - the input
       // path itself (or a flag) means "not translated yet" → output.ext.
       if (!last.startsWith('-') && last !== inputFile) {
         const e = extname(last);
@@ -150,10 +151,11 @@
     if (openFolderBtn) openFolderBtn.disabled = !shown.trim();
   }
 
-  // Extension the translated command produces ('' if unknown yet).
+  // Extension the effective command produces ('' if unknown yet).
   function translatedExt() {
-    if (lastArgs && lastArgs.length > 0) {
-      const last = String(lastArgs[lastArgs.length - 1]);
+    const eff = effectiveArgs();
+    if (eff && eff.length > 0) {
+      const last = String(eff[eff.length - 1]);
       if (!last.startsWith('-')) return extname(last).toLowerCase();
     }
     return '';
@@ -170,6 +172,49 @@
   function effectiveOutput() {
     const v = (outputPath.value || '').trim();
     return v || null;
+  }
+
+  // The Translated box is editable and runs as-is (only -y and the
+  // container extension are enforced at run time). Minimal shell-aware split
+  // so quoted paths survive; a leading `ffmpeg` is dropped.
+  function tokenizeCustomCommand(text) {
+    const s = String(text || '').trim().replace(/^ffmpeg\s+/i, '').trim();
+    if (!s) return null;
+    const tokens = [];
+    let cur = '';
+    let quote = null;
+    for (let i = 0; i < s.length; i++) {
+      const c = s[i];
+      if (quote) {
+        if (c === quote) quote = null;
+        else cur += c;
+      } else if (c === '"' || c === "'") {
+        quote = c;
+      } else if (/\s/.test(c)) {
+        if (cur) { tokens.push(cur); cur = ''; }
+      } else {
+        cur += c;
+      }
+    }
+    if (cur) tokens.push(cur);
+    return tokens.length > 0 ? tokens : null;
+  }
+
+  function customArgs() {
+    if (!cmdOut) return null;
+    const v = (cmdOut.value || '').trim();
+    if (!v) return null;
+    return tokenizeCustomCommand(v);
+  }
+
+  // Source of truth for Run + output extension: the editable box wins,
+  // translated args are the fallback.
+  function effectiveArgs() {
+    return customArgs() || lastArgs;
+  }
+
+  function refreshRunEnabled() {
+    runBtn.disabled = !effectiveArgs();
   }
 
   function setBadge(state, text) {
@@ -299,7 +344,7 @@
     lastArgs = null;
     clearError();
     engineNote.textContent = '';
-    cmdOut.textContent = '-';
+    if (cmdOut) cmdOut.value = '';
     runBtn.disabled = true;
     setStatus(translateStatus, 'st-idle', 'Idle');
     setStatus(ffmpegStatus, 'st-idle', 'Idle');
@@ -462,20 +507,21 @@
     try {
       const res = await window.api.translatePrompt({ instruction: text, inputFile, duration: mediaDuration, width: mediaWidth, height: mediaHeight });
       if (!res || res.ok === false) {
-        // LLM failure: never execute anything.
+        // LLM failure: never execute the translation. Typed edits stay put -
+        // they do not depend on the LLM and remain runnable.
         lastArgs = null;
-        runBtn.disabled = true;
-        cmdOut.textContent = '-';
         paintBar(barTranslate, 0);
         setStatus(translateStatus, 'st-failed', 'Failed');
         if (res && res.raw) log('raw LLM output (truncated): ' + String(res.raw).slice(0, 800));
         if (res && res.hint) log(res.hint);
         if (res && res.diag) log('LLM diagnostics: ' + res.diag);
         showError((res && res.error) || 'unknown error');
+        refreshOutputDisplay();
+        refreshRunEnabled();
         return null;
       }
       lastArgs = res.args;
-      cmdOut.textContent = 'ffmpeg ' + res.argsString;
+      if (cmdOut) cmdOut.value = 'ffmpeg ' + res.argsString;
       if (res.corrections && res.corrections.length > 0) {
         for (const c of res.corrections) log('auto-corrected: ' + c);
         engineNote.textContent =
@@ -488,29 +534,40 @@
       log(`output → ${effectiveOutput() || '(none yet - select an input video)'}`);
       paintBar(barTranslate, 100);
       setStatus(translateStatus, 'st-done', 'Done');
-      runBtn.disabled = !lastArgs;
+      refreshRunEnabled();
       return res;
     } catch (e) {
       lastArgs = null;
-      runBtn.disabled = true;
       paintBar(barTranslate, 0);
       setStatus(translateStatus, 'st-failed', 'Failed');
       showError((e && e.message ? e.message : e) || 'unknown error');
+      refreshOutputDisplay();
+      refreshRunEnabled();
       return null;
     } finally {
       translateBtn.disabled = false;
       translateOnlyBtn.disabled = false;
-      runBtn.disabled = !lastArgs;
+      refreshRunEnabled();
     }
   }
 
   async function run() {
-    if (!lastArgs) {
-      log('Nothing to run - translate first.');
+    const args = effectiveArgs();
+    if (!args) {
+      log('Nothing to run - translate first or type your own command.');
       return;
     }
-    // inputFile and output are guaranteed here: lastArgs only exists after
-    // a successful translate (which needs a video), and setFile clears it.
+    if (!inputFile) {
+      showBanner('Load a video first - drag & drop a file onto the card or press Browse.');
+      return;
+    }
+    if (!args.includes('-i')) {
+      showBanner('Your command needs an input (-i) - translate first or fix the command.');
+      return;
+    }
+    // inputFile and output are guaranteed here: effectiveArgs only exists
+    // after a successful translate or a typed command (both need a video),
+    // and setFile clears both.
     const out = effectiveOutput();
     // Ask (in-app modal) before overwriting an existing file.
     try {
@@ -533,7 +590,7 @@
     setStatus(ffmpegStatus, 'st-active', 'Running…');
     log(`running ffmpeg → ${out}…`);
     try {
-      const res = await window.api.runFfmpeg({ args: lastArgs, outputFile: out });
+      const res = await window.api.runFfmpeg({ args, outputFile: out });
       paintBar(barFfmpeg, 100);
       setStatus(ffmpegStatus, 'st-done', 'Done');
       log('done → ' + (res && res.output ? res.output : 'ok'));
@@ -545,8 +602,8 @@
       terminal.scrollTop = terminal.scrollHeight;
       log('ffmpeg failed: ' + (e && e.message ? e.message : e));
     } finally {
-      // A video switched mid-run cleared lastArgs - do not re-enable Run then.
-      runBtn.disabled = !lastArgs;
+      // A video switched mid-run cleared the commands - do not re-enable then.
+      refreshRunEnabled();
       translateBtn.disabled = false;
       translateOnlyBtn.disabled = false;
     }
@@ -733,7 +790,7 @@
         outputManual = true;
         refreshOutputDisplay();
         if (outputPath.value !== p) {
-          log(`output set to: ${outputPath.value} (extension follows the translated command)`);
+          log(`output set to: ${outputPath.value} (extension follows the command)`);
         } else {
           log(`output set to: ${p}`);
         }
@@ -744,6 +801,11 @@
   });
 
   translateOnlyBtn.addEventListener('click', translate);
+  if (cmdOut) cmdOut.addEventListener('input', () => {
+    clearError();
+    refreshOutputDisplay();
+    refreshRunEnabled();
+  });
   if (openFolderBtn) openFolderBtn.addEventListener('click', async () => {
     // The button stays disabled until a destination exists, so dir is
     // non-empty here; main still rejects anything unusable.

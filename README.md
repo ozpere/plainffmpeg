@@ -9,6 +9,7 @@ Self-contained video editor using plain English - describe the edit, the app tra
 3. The bundled GGUF model (`Qwen3-1.7B` via `node-llama-cpp`)
    translates it to FFmpeg arguments, which run through a bundled
    `ffmpeg-static` binary with live logs.
+4. If the translation looks wrong, edit it right in *Translated FFmpeg command (editable)* - edits run as-is (only `-y` plus the container extension are enforced) and need `-i`.
 
 LLM problems never run a guessed command - they surface as a clear error
 instead. No silent fallbacks, anywhere.
@@ -90,8 +91,8 @@ src/
   llm.js               Local GGUF engine (prompt, session, diagnostics)
   preload.js           Minimal context-bridge API (sandboxed renderer)
   renderer/
-    index.html         UI structure, model download card, open-folder shortcut
-    renderer.js        UI logic (load → probe → translate → run, model download)
+    index.html         UI structure, model download card, open-folder shortcut, editable command box
+    renderer.js        UI logic (load → probe → translate → run, model download, editable command box)
     styles.css         Warm-charcoal theme
 scripts/
   download-model.js    GGUF fetcher (Hugging Face, resumable, format-checked)
@@ -127,7 +128,7 @@ models/                GGUF weights live here (gitignored, never committed)
 - Size limits ("below 2GB") are enforced with single-pass capped
   bitrate computed from the probed duration (stretched by slow motion,
   shrunk by high speed) - two-pass is never used.
-- Output extensions always follow the translated container, and the app
+- Output extensions always follow the effective command (box edits win over the stored translation), and the app
   asks before overwriting an existing file.
 - Open folder jumps to the output directory (disabled until a destination
   exists).

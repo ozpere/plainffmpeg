@@ -590,7 +590,9 @@ async function main() {
   assert.ok(renderer.includes("showBanner('Type an instruction first,"), 'empty instruction must banner');
   // no second flight while one runs: run locks translate, translate locks run.
   assert.ok(/async function run\(\)[\s\S]{0,3000}?translateBtn\.disabled = true/.test(renderer), 'run must lock translate buttons');
-  assert.ok(renderer.includes('runBtn.disabled = !lastArgs'), 'run availability must follow the translation');
+  assert.ok(renderer.includes('refreshRunEnabled'), 'run availability must follow effective args (translation or box edits)');
+  assert.ok(renderer.includes('function effectiveArgs'), 'box edits must feed the run path');
+  assert.ok(renderer.includes('Your command needs an input'), 'box command without -i must be rejected');
   assert.ok(renderer.includes('if (!p) return; log(p.line)'), 'log subscriber must guard nulls');
   // main names the same cause in logs and in the banner
   assert.ok(pathsSrc.includes('Visual C++ Redistributable'), 'MSVC hint must name the redistributable');
@@ -690,8 +692,14 @@ async function main() {
   assert.ok(renderer.includes('scheduleRefresh(1500)'), 'download nudge must reuse the single timer');
   // modal prompts serialize instead of clobbering each other.
   assert.ok(renderer.includes('confirmQueue'), 'confirm dialogs must be queued');
-  // run is locked while a translation is in flight.
-  assert.ok(renderer.includes('runBtn.disabled = !lastArgs'), 'run availability must follow the translation');
+  // run is locked while a translation is in flight; box edits keep Run
+  // available without a fresh translation.
+  assert.ok(renderer.includes('refreshRunEnabled'), 'run availability must follow effective args');
+  assert.ok(html.includes('<textarea id="cmdOut"'), 'command box must be an editable textarea');
+  assert.ok(html.includes('Translated FFmpeg command (editable)'), 'command label must say editable');
+  assert.ok(!html.includes('id="cmdEdit"'), 'separate override field must be gone');
+  assert.ok(!renderer.includes('cmdEdit'), 'renderer must not reference the old field');
+  assert.ok(renderer.includes('tokenizeCustomCommand'), 'box edits must tokenize quoted paths');
   // unbounded log growth freezes the page on long ffmpeg runs.
   assert.ok(renderer.includes('200000'), 'terminal log must be capped');
   // dead dialogs must explain themselves instead of hanging silently.
