@@ -96,7 +96,6 @@ function inferOutputExt(args, instruction) {
   const wordExt =
     /\bmkv\b/.test(lower) ? '.mkv'
     : /\bwebm\b/.test(lower) ? '.webm'
-    : /\bgif\b/.test(lower) ? '.gif'
     : /\bmp3\b|\baudio only\b|\bextract (the )?audio\b/.test(lower) ? '.mp3'
     : /\bmov\b/.test(lower) ? '.mov'
     : /\bavi\b/.test(lower) ? '.avi'

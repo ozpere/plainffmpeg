@@ -695,6 +695,7 @@ async function main() {
   assert.ok(renderer.includes('portable build does not install it'), 'portable must explain the missing system step');
   assert.ok(renderer.includes('Local LLM failed to load'), 'failed loads must name the failure, not promise a retry');
   assert.ok(!renderer.includes('Last LLM load failed - will retry on first translation'), 'misleading retry line must be gone');
+  assert.ok(!renderer.includes("startsWith('Last LLM load failed')"), 'dead failure-text check must be gone');
   assert.ok(renderer.includes('showBanner'), 'errors must surface through the themed banner');
   // empty instruction must be visible, not a hidden log line.
   assert.ok(renderer.includes("showBanner('Type an instruction first,"), 'empty instruction must banner');
@@ -770,6 +771,9 @@ async function main() {
   assert.ok(mainSrc.includes("replace('app.asar', 'app.asar.unpacked')"), 'ffmpeg path must be unpacked for spawn');
   // main must force overwrite (-y) - tested via source since spawn needs ffmpeg
   assert.ok(mainSrc.includes("finalArgs.unshift('-y')"), 'run must force -y overwrite');
+  // extension enforcement happens before substitution (outputExt coercion),
+  // never against the already-resolved trailing token
+  assert.ok(!mainSrc.includes('enforceOutputExtension(finalArgs'), 'resolved-token enforcement must be gone');
   // no File/Edit/View menu bar
   assert.ok(mainSrc.includes('setApplicationMenu(null)'), 'default menu bar must be removed');
   console.log('[smoke] output + menu OK');
@@ -1453,6 +1457,7 @@ async function main() {
   assert.ok(renderer.includes('STOP_LABEL'), 'Run must morph into Stop while running');
   assert.ok(renderer.includes('ffmpegRunning'), 'morph clicks must route by run state');
   assert.ok(renderer.includes('ffmpegRunning ? false'), 'Stop must stay clickable mid-run');
+  assert.ok(renderer.includes('p.cancelled'), 'cancel progress must mark Cancelled, never Failed');
   assert.ok(renderer.includes('inputFile !== translateFile'), 'late results for an old video must be discarded');
   assert.ok(renderer.includes('cancelFfmpeg'), 'morphed button must still reach cancel');
   console.log('[smoke] button order OK');

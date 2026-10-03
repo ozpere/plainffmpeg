@@ -339,7 +339,7 @@ function handleModelStatus() {
   };
 }
 
-async function handleTranslatePrompt({ instruction, inputFile, duration, width, height }) {
+async function handleTranslatePrompt({ instruction, duration, width, height }) {
   const durLine = duration && duration > 0 ? `Input duration: ${duration} seconds.\n` : '';
   const dimLine = (width > 0 && height > 0) ? `Source resolution: ${width}x${height}.\n` : '';
   // Exact numbers are pre-computed by the deterministic builders so the
@@ -578,12 +578,6 @@ async function handleRunFfmpeg(event, { args, outputFile, inputFile, outputExt }
   // -y keeps non-interactive runs from hanging on an overwrite prompt;
   // user consent is gathered beforehand via the overwrite dialog.
   if (!finalArgs.includes('-y') && !finalArgs.includes('-n')) finalArgs.unshift('-y');
-  // Enforce the translated container extension on the chosen destination.
-  const enforced = enforceOutputExtension(finalArgs[finalArgs.length - 1], finalArgs);
-  if (enforced.changed) {
-    emit('ffmpeg-log', { line: `output extension follows the command: ${finalArgs[finalArgs.length - 1]} → ${enforced.path}` });
-    finalArgs[finalArgs.length - 1] = enforced.path;
-  }
   const output = finalArgs[finalArgs.length - 1];
 
   return await new Promise((resolve, reject) => {
@@ -696,8 +690,9 @@ if (isElectron && ipcMain) {
 
 module.exports = {
   // Module contract: orchestration above plus the split modules' members.
-  // userDataModelsDir, MSVC_DLLS, MSVC_DOWNLOAD_URL, defaultOutputPath and
-  // SYSTEM_PROMPT are imported solely for re-export (see header comment).
+  // userDataModelsDir, MSVC_DLLS, MSVC_DOWNLOAD_URL, defaultOutputPath,
+  // enforceOutputExtension and SYSTEM_PROMPT are imported solely for
+  // re-export (see header comment).
   sanitizeModelOutput,
   tokenizeArgs,
   fixupArgs,

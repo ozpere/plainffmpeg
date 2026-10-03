@@ -445,7 +445,7 @@
         setModelDlVisible(false);
         modelDownloading = false;
         setBadge('ready', `Engine: ${s.engine} · ${(s.size / 1e6).toFixed(1)} MB`);
-        if (engineNote.textContent.startsWith('Local LLM failed to load') || engineNote.textContent.startsWith('Last LLM load failed')) {
+        if (engineNote.textContent.startsWith('Local LLM failed to load')) {
           engineNote.textContent = '';
           engineNote.classList.remove('error');
         }
@@ -512,8 +512,9 @@
     try {
       const res = await window.api.translatePrompt({ instruction: text, inputFile, duration: mediaDuration, width: mediaWidth, height: mediaHeight });
       if (inputFile !== translateFile) {
-        // Video switched mid-translation: the result names the old file.
-        // Drop it rather than running stale flags against the new video.
+        // Video switched mid-translation: the result was computed for the
+        // old video (and its duration). Drop it rather than running stale
+        // flags against the new video.
         paintBar(barTranslate, 0);
         setStatus(translateStatus, 'st-idle', 'Idle');
         log('translation superseded by video switch - discarded.');
@@ -967,11 +968,12 @@
     if (!p) return;
     if (p.done) {
       paintBar(barFfmpeg, 100);
-      if (ffmpegStatus.textContent === 'Running…') {
-        if (p.code === 0) setStatus(ffmpegStatus, 'st-done', 'Done');
-        else if (typeof p.code === 'number') setStatus(ffmpegStatus, 'st-failed', `Failed (code ${p.code})`);
-        else setStatus(ffmpegStatus, 'st-failed', 'Failed');
-      }
+      // Progress events race the invoke result below - only paint while a
+      // run is still live, and never let a cancel flash as Failed first.
+      if (!ffmpegRunning) return;
+      if (p.cancelled) setStatus(ffmpegStatus, 'st-cancelled', 'Cancelled');
+      else if (p.code === 0) setStatus(ffmpegStatus, 'st-done', 'Done');
+      else setStatus(ffmpegStatus, 'st-failed', 'Failed');
     } else if (typeof p.pct === 'number') {
       const pct = Math.max(0, Math.min(100, p.pct));
       paintBar(barFfmpeg, pct);

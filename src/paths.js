@@ -166,8 +166,8 @@ function isMsvcMissingError(err) {
 
 // Default output: same directory as the input, named `<name>-out.<ext>`
 // where <name> is the input's own basename (so consecutive videos never
-// collide) and <ext> comes from the translated command's output. Until
-// translated it is literally `<name>-out.ext` - never a guessed container.
+// collide) and <ext> comes from the trailing token's extension when it has
+// one (a templated `{output}` has none → `<name>-out.ext`, never guessed).
 function defaultOutputPath(inputFile, args) {
   const dir = inputFile ? path.dirname(inputFile) : process.cwd();
   let ext = '';

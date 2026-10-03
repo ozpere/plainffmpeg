@@ -110,7 +110,7 @@ models/                GGUF weights live here (gitignored, never committed)
   (or failed, with the cause in the logs). A translation requested
   mid-load simply waits for it.
 - Translation and FFmpeg step statuses are color- and icon-coded (Idle,
-  Translating.../Running..., Done, Failed, Cancelled), so outcomes read at
+  Translating…/Running… (live N% during runs), Done, Failed, Cancelled), so outcomes read at
   a glance.
 - "Trim the last N seconds" means *cutting* those seconds off
   (`-t duration-N`); "keep the last N" keeps the tail; "keep the middle N"
