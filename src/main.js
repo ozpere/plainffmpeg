@@ -35,7 +35,8 @@ const {
   fixupSizeLimit,
   fixupConflicts,
   ensureOutputFile,
-  fixupOutputDir,
+  inferOutputExt,
+  resolvePlaceholders,
   parseSizeLimit,
   parseHMS,
   fmtSec,
@@ -347,7 +348,7 @@ async function handleTranslatePrompt({ instruction, inputFile, duration, width, 
   const middleLine = buildMiddleLine(instruction, duration);
   const rangeLine = buildRangeLine(instruction);
   const speedLine = buildSpeedLine(instruction);
-  const userPrompt = `Input file: ${inputFile || 'input.mp4'}\n${durLine}${dimLine}${sizeLine}${middleLine}${rangeLine}${speedLine}Task: ${instruction || ''}\nFFmpeg args:\n/no_think`;
+  const userPrompt = `Input file: {input}\n${durLine}${dimLine}${sizeLine}${middleLine}${rangeLine}${speedLine}Task: ${instruction || ''}\nFFmpeg args:\n/no_think`;
   // No silent fallback: any LLM problem is returned as an error so the UI
   // can alert the user instead of running a guessed-up command.
   let rawOut = '';
@@ -363,9 +364,12 @@ async function handleTranslatePrompt({ instruction, inputFile, duration, width, 
     rawOut = String(raw || '');
     const cleaned = sanitizeModelOutput(raw);
     if (!cleaned) throw new Error('LLM returned empty output.');
-    const tokens = tokenizeArgs(cleaned, inputFile);
-    // Fixed order lives in runTranslationPipeline (fixups.js).
-    const { args, corrections } = runTranslationPipeline(tokens, { instruction, inputFile, duration });
+    const tokens = tokenizeArgs(cleaned);
+    // Fixed order lives in runTranslationPipeline (fixups.js). The result
+    // stays templated (`-i {input}`, trailing `{output}`) for display;
+    // outputExt drives the output picker, the runner resolves both tokens.
+    const { args, corrections } = runTranslationPipeline(tokens, { instruction, duration });
+    const outputExt = inferOutputExt(args, instruction);
     return {
       ok: true,
       engine: 'node-llama-cpp',
@@ -373,6 +377,7 @@ async function handleTranslatePrompt({ instruction, inputFile, duration, width, 
       argsString: quoteArgs(args),
       args,
       corrections,
+      outputExt,
     };
   } catch (err) {
     const message = err && err.message ? err.message : String(err);
@@ -530,7 +535,7 @@ async function probeMedia(inputFile) {
 let runningProc = null;
 let runCancelled = false;
 
-async function handleRunFfmpeg(event, { args, outputFile }) {
+async function handleRunFfmpeg(event, { args, outputFile, inputFile, outputExt }) {
   if (!ffmpegPath) throw new Error('ffmpeg-static binary not available.');
   if (!Array.isArray(args) || args.length === 0) throw new Error('No FFmpeg args provided.');
 
@@ -545,16 +550,31 @@ async function handleRunFfmpeg(event, { args, outputFile }) {
     try { sender.send(channel, payload); } catch { /* window closed */ }
   };
 
+  // Resolve the template tokens to the run's real paths. A custom box
+  // without tokens skips this and runs as-is.
+  let dest = outputFile;
+  if (typeof outputExt === 'string' && outputExt.startsWith('.') && dest) {
+    const s = String(dest);
+    const base = s.slice(Math.max(s.lastIndexOf('/'), s.lastIndexOf('\\')) + 1);
+    const dot = base.lastIndexOf('.');
+    if (dot > 0 && base.slice(dot).toLowerCase() !== outputExt.toLowerCase()) {
+      const coerced = s.slice(0, s.length - (base.length - dot)) + outputExt;
+      emit('ffmpeg-log', { line: `output extension follows the command: ${dest} → ${coerced}` });
+      dest = coerced;
+    }
+  }
+  let finalArgs = resolvePlaceholders(args, inputFile, dest);
+  if (finalArgs.includes('{input}')) throw new Error('Command uses {input} but no input video was provided.');
+  if (finalArgs.includes('{output}')) throw new Error('Command uses {output} but no output destination was provided.');
+  if (dest) {
+    // Replace trailing non-flag token (output path) with explicit dest.
+    const last = finalArgs[finalArgs.length - 1];
+    if (last && !last.startsWith('-')) finalArgs[finalArgs.length - 1] = dest;
+    else finalArgs.push(dest);
+  }
   // Spawn the binary directly so arbitrary LLM flags run verbatim,
   // while streaming logs to the renderer.
   const { spawn } = require('child_process');
-  let finalArgs = [...args];
-  if (outputFile) {
-    // Replace trailing non-flag token (output path) with explicit outputFile.
-    const last = finalArgs[finalArgs.length - 1];
-    if (last && !last.startsWith('-')) finalArgs[finalArgs.length - 1] = outputFile;
-    else finalArgs.push(outputFile);
-  }
   // -y keeps non-interactive runs from hanging on an overwrite prompt;
   // user consent is gathered beforehand via the overwrite dialog.
   if (!finalArgs.includes('-y') && !finalArgs.includes('-n')) finalArgs.unshift('-y');
@@ -704,7 +724,8 @@ module.exports = {
   fixupSizeLimit,
   fixupConflicts,
   ensureOutputFile,
-  fixupOutputDir,
+  inferOutputExt,
+  resolvePlaceholders,
   parseSizeLimit,
   parseTrimIntent,
   trimNeedsDuration,

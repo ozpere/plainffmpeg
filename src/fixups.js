@@ -1,13 +1,12 @@
 /**
  * Deterministic correction layers for the translation pipeline.
  *
- * Pure functions (plus one fs existence check in fixupInput): each takes
- * parsed args and returns { args, corrections } without throwing. They turn
- * common LLM mistakes into commands ffmpeg actually accepts, and every
- * rewrite is reported so the UI can log it. Order of application lives in
- * runTranslationPipeline below and is fixed - do not reorder the steps.
+ * Pure functions, no filesystem: each takes parsed args and returns
+ * { args, corrections } without throwing. They turn common LLM mistakes
+ * into commands ffmpeg actually accepts, and every rewrite is reported so
+ * the UI can log it. Order of application lives in runTranslationPipeline
+ * below and is fixed - do not reorder the steps.
  */
-const fs = require('fs');
 
 function sanitizeModelOutput(raw) {
   let text = String(raw || '').trim();
@@ -26,9 +25,9 @@ function sanitizeModelOutput(raw) {
     .split('\n')
     .map((l) => l.trim().replace(/^(?:[*→>]+|\d+[.)]|-\s+)\s*/, ''))
     .filter(Boolean);
-  // Keep content lines (flags or media paths); drop prose ("Here is…").
+  // Keep content lines (flags, template tokens, or media paths); drop prose ("Here is…").
   const kept = lines.filter(
-    (l) => /-[a-zA-Z]/.test(l) || /\.(mp4|mkv|webm|mov|avi|gif|mp3|png|jpe?g)\b/i.test(l)
+    (l) => /-[a-zA-Z]/.test(l) || /\{(input|output)\}/.test(l) || /\.(mp4|mkv|webm|mov|avi|gif|mp3|png|jpe?g)\b/i.test(l)
   );
   const joined = (kept.length > 0 ? kept : lines).join(' ');
   // Drop a leading "ffmpeg" binary name - renderer prepends the binary path.
@@ -47,10 +46,9 @@ function looksLikeFileToken(tok) {
   return /[/\\]/.test(t) || /\.[A-Za-z0-9]{2,4}["']?$/i.test(t);
 }
 
-// The model sometimes stops right before the output filename. Recover
-// deterministically: append output.<ext> (container from instruction words,
-// else codec hints, else .mp4). The runner swaps in the real destination;
-// only the extension matters downstream.
+// The model works with template tokens, never real paths: the input is
+// always `-i {input}` and the output is always the trailing `{output}`.
+// The runner resolves both to real paths at run time.
 function ensureOutputFile(args, instruction) {
   const corrections = [];
   if (!Array.isArray(args) || args.length === 0) return { args, corrections };
@@ -72,61 +70,60 @@ function ensureOutputFile(args, instruction) {
   if (dropped.length > 0) {
     corrections.push(`Dropped dangling ${dropped.join(', ')} (truncated answer left a flag with no value)`);
   }
-  if (looksLikeFileToken(out[out.length - 1])) return { args: out, corrections };
-  const text = String(instruction || '').toLowerCase();
+  if (out[out.length - 1] === '{output}') return { args: out, corrections };
+  if (looksLikeFileToken(out[out.length - 1])) {
+    const cur = out[out.length - 1];
+    out[out.length - 1] = '{output}';
+    corrections.push(`Replaced "${cur}" with {output} (paths are templated, never literal)`);
+    return { args: out, corrections };
+  }
+  out.push('{output}');
+  corrections.push('LLM omitted the output file - appended {output}');
+  return { args: out, corrections };
+}
+
+// Output container from the instruction words (plus codec hints), since the
+// templated `{output}` carries no extension. Thumbnail and gif intents own
+// their containers; otherwise instruction words win, then codec hints,
+// then .mp4. Mirrors the old ensureOutputFile/Thumbnail filename logic.
+function inferOutputExt(args, instruction) {
+  const text = String(instruction || '');
+  if (/\bgif\b/i.test(text)) return '.gif';
+  if (/\bthumbnails?\b|\bposter\b|\bcover\s+(image|frame|art)\b|\bextract\s+(a\s+)?frames?\b/i.test(text)) {
+    return /\bjpe?g\b/i.test(text) ? '.jpg' : '.png';
+  }
+  const lower = text.toLowerCase();
   const wordExt =
-    /\bmkv\b/.test(text) ? '.mkv'
-    : /\bwebm\b/.test(text) ? '.webm'
-    : /\bgif\b/.test(text) ? '.gif'
-    : /\bmp3\b|\baudio only\b|\bextract (the )?audio\b/.test(text) ? '.mp3'
-    : /\bmov\b/.test(text) ? '.mov'
-    : /\bavi\b/.test(text) ? '.avi'
-    : /\bmp4\b/.test(text) ? '.mp4'
-    : /\bpng\b/.test(text) ? '.png'
-    : /\bjpe?g\b/.test(text) ? '.jpg'
+    /\bmkv\b/.test(lower) ? '.mkv'
+    : /\bwebm\b/.test(lower) ? '.webm'
+    : /\bgif\b/.test(lower) ? '.gif'
+    : /\bmp3\b|\baudio only\b|\bextract (the )?audio\b/.test(lower) ? '.mp3'
+    : /\bmov\b/.test(lower) ? '.mov'
+    : /\bavi\b/.test(lower) ? '.avi'
+    : /\bmp4\b/.test(lower) ? '.mp4'
+    : /\bpng\b/.test(lower) ? '.png'
+    : /\bjpe?g\b/.test(lower) ? '.jpg'
     : null;
-  const joined = out.join(' ').toLowerCase();
-  const hintExt = wordExt
+  const joined = (Array.isArray(args) ? args.join(' ') : '').toLowerCase();
+  return wordExt
     || (joined.includes('libvpx-vp9') || joined.includes('libopus') ? '.webm' : null)
     || (joined.includes('libmp3lame') || /\s-vn(\s|$)/.test(joined + ' ') ? '.mp3' : null)
     || '.mp4';
-  out.push(`output${hintExt}`);
-  corrections.push(`LLM omitted the output file - appended output${hintExt}`);
-  return { args: out, corrections };
 }
 
-// The model learns directories from prompt examples, so it may emit the
-// example dir (/tmp) instead of the input folder. A wrong directory only
-// shows in the translated box (the runner swaps in the real destination),
-// but the shown command must still name the input folder. Bare filenames
-// stay bare - they are placeholders the runner replaces.
-function fixupOutputDir(args, inputFile) {
-  const corrections = [];
-  if (!inputFile || !Array.isArray(args) || args.length === 0) return { args, corrections };
-  const out = [...args];
-  const last = out[out.length - 1];
-  if (!last || String(last).startsWith('-')) return { args: out, corrections };
-  const dirOf = (p) => {
-    const s = String(p);
-    const i = Math.max(s.lastIndexOf('/'), s.lastIndexOf('\\'));
-    return i >= 0 ? s.slice(0, i) : '';
-  };
-  const inDir = dirOf(inputFile);
-  if (!inDir) return { args: out, corrections };
-  const outStr = String(last);
-  const outDir = dirOf(outStr);
-  if (!outDir) return { args: out, corrections };
-  if (outDir === inDir) return { args: out, corrections };
-  const base = outStr.slice(Math.max(outStr.lastIndexOf('/'), outStr.lastIndexOf('\\')) + 1);
-  if (!base) return { args: out, corrections };
-  const sep = inDir.includes('\\') ? '\\' : '/';
-  const clean = (inDir.endsWith('/') || inDir.endsWith('\\')) ? inDir.slice(0, -1) : inDir;
-  out[out.length - 1] = clean + sep + base;
-  corrections.push(`Rewrote output directory to the input folder (${outStr} → ${out[out.length - 1]})`);
-  return { args: out, corrections };
+// Run-time substitution of the template tokens with the run's real paths.
+// Total: tokens without a provided path are left alone so the caller can
+// report exactly which path is missing. Never throws.
+function resolvePlaceholders(args, inputFile, outputFile) {
+  if (!Array.isArray(args)) return args;
+  return args.map((t) => {
+    if (t === '{input}' && inputFile) return inputFile;
+    if (t === '{output}' && outputFile) return outputFile;
+    return t;
+  });
 }
 
-function tokenizeArgs(argString, inputFile) {
+function tokenizeArgs(argString) {
   // Minimal shell-aware splitter (handles single/double quotes).
   const tokens = [];
   let cur = '';
@@ -145,8 +142,8 @@ function tokenizeArgs(argString, inputFile) {
     }
   }
   if (cur) tokens.push(cur);
-  // Ensure an input is present.
-  if (!tokens.includes('-i') && inputFile) return ['-y', '-i', inputFile, ...tokens];
+  // Ensure an input is present (templated - resolved at run time).
+  if (!tokens.includes('-i')) return ['-i', '{input}', ...tokens];
   return tokens;
 }
 
@@ -234,24 +231,23 @@ function quoteArgs(args) {
   return args.map((a) => (/\s/.test(a) ? `"${a}"` : a)).join(' ');
 }
 
-// The model sometimes echoes the prompt placeholder (`-i input.mp4`). The
-// input always comes from the loaded video, so rewrite a missing or fake
-// -i value with it. Returns { args, corrections } - never throws.
-function fixupInput(args, inputFile) {
+// The model must use the template token, never a real path: any `-i`
+// value becomes `{input}`, and a missing `-i` is inserted up front.
+// Returns { args, corrections } - never throws.
+function fixupInput(args) {
   const corrections = [];
-  if (!inputFile || !Array.isArray(args)) return { args, corrections };
+  if (!Array.isArray(args)) return { args, corrections };
   const out = [...args];
   const iIdx = out.findIndex((t) => t === '-i');
-  if (iIdx === -1 || typeof out[iIdx + 1] !== 'string') return { args: out, corrections };
-  const cur = out[iIdx + 1];
-  const isPlaceholder = /^input(\.\w+)?$/i.test(cur);
-  let exists = false;
-  try {
-    exists = fs.existsSync(cur);
-  } catch { exists = false; }
-  if (cur !== inputFile && (isPlaceholder || !exists)) {
-    out[iIdx + 1] = inputFile;
-    corrections.push(`Rewrote "-i ${cur}" as the loaded video (placeholder/missing file)`);
+  if (iIdx === -1 || typeof out[iIdx + 1] !== 'string' || String(out[iIdx + 1]).startsWith('-')) {
+    out.unshift('-i', '{input}');
+    corrections.push('Inserted missing "-i {input}" (paths are templated, never literal)');
+    return { args: out, corrections };
+  }
+  if (out[iIdx + 1] !== '{input}') {
+    const cur = out[iIdx + 1];
+    out[iIdx + 1] = '{input}';
+    corrections.push(`Rewrote "-i ${cur}" as "-i {input}" (paths are templated, never literal)`);
   }
   return { args: out, corrections };
 }
@@ -1109,15 +1105,8 @@ function fixupThumbnail(args, instruction, duration) {
     insertBeforeOutput(out, '-frames:v', '1');
     corrections.push('Thumbnail: rendering a single frame (-frames:v 1)');
   }
-  const last = out[out.length - 1];
-  if (last && !String(last).startsWith('-')) {
-    const m = /^(.*)\.(mp4|mkv|webm|mov|avi|m4v)$/i.exec(String(last));
-    if (m) {
-      const wantExt = /\bjpe?g\b/i.test(instr) ? '.jpg' : '.png';
-      out[out.length - 1] = m[1] + wantExt;
-      corrections.push(`Thumbnail: single frame uses ${wantExt} (was .${m[2].toLowerCase()})`);
-    }
-  }
+  // The container stays `{output}` - inferOutputExt picks .png/.jpg from
+  // the instruction words after the pipeline.
   const droppedRates = dropValuedFlags(out, ['-b:v', '-maxrate', '-bufsize']);
   if (droppedRates.length > 0) {
     corrections.push(`Thumbnail: dropped bitrate flags (${droppedRates.join(', ')}) - a still has no bitrate`);
@@ -1165,10 +1154,12 @@ function buildSpeedLine(instruction) {
 }
 
 // Fixed translation order in one place: token fixes, filter construction
-// (so fixupConflicts sees every filter), input, conflicts, output
-// placeholder, trims, size cap, thumbnail last.
+// (so fixupConflicts sees every filter), input/output templating,
+// trims, size cap, thumbnail last. The pipeline never sees real paths:
+// `-i {input}` and the trailing `{output}` are resolved to real paths by
+// the runner at run time (see resolvePlaceholders).
 function runTranslationPipeline(tokens, context) {
-  const { instruction, inputFile, duration } = context || {};
+  const { instruction, duration } = context || {};
   const steps = [
     (a) => fixupArgs(a),
     (a) => fixupDedupeSeek(a),
@@ -1178,10 +1169,9 @@ function runTranslationPipeline(tokens, context) {
     (a) => fixupRotate(a, instruction),
     (a) => fixupVolume(a, instruction),
     (a) => fixupGif(a, instruction),
-    (a) => fixupInput(a, inputFile),
+    (a) => fixupInput(a),
     (a) => fixupConflicts(a, instruction),
     (a) => ensureOutputFile(a, instruction),
-    (a) => fixupOutputDir(a, inputFile),
     (a) => fixupLastTrim(a, instruction, duration),
     (a) => fixupMiddleTrim(a, instruction, duration),
     (a) => fixupFirstTrim(a, instruction, duration),
@@ -1204,7 +1194,8 @@ module.exports = {
   sanitizeModelOutput,
   looksLikeFileToken,
   ensureOutputFile,
-  fixupOutputDir,
+  inferOutputExt,
+  resolvePlaceholders,
   tokenizeArgs,
   P_HEIGHTS,
   fixupArgs,

@@ -52,6 +52,7 @@
   let outputFile = null;   // explicit destination; null = use computed default
   let outputManual = false;
   let lastArgs = null;
+  let lastOutputExt = ''; // container from the translation (templated {output} has no extension)
   let modelDownloading = false; // model fetch in flight - keep its card up
 
   function log(line) {
@@ -121,16 +122,8 @@
   function defaultOutput() {
     if (!inputFile) return '';
     let ext = '.ext';
-    const eff = effectiveArgs();
-    if (eff && eff.length > 0) {
-      const last = String(eff[eff.length - 1]);
-      // Only a real *output* determines the container - the input
-      // path itself (or a flag) means "not translated yet" → -out.ext.
-      if (!last.startsWith('-') && last !== inputFile) {
-        const e = extname(last);
-        if (e) ext = e;
-      }
-    }
+    const e = translatedExt();
+    if (e) ext = e;
     return joinDir(dirname(inputFile), `${inputStem(inputFile)}-out` + ext);
   }
 
@@ -161,11 +154,14 @@
   }
 
   // Extension the effective command produces ('' if unknown yet).
+  // Templated translations end with `{output}` (no extension to read),
+  // so the container comes from the translation metadata instead.
   function translatedExt() {
     const eff = effectiveArgs();
     if (eff && eff.length > 0) {
       const last = String(eff[eff.length - 1]);
-      if (!last.startsWith('-')) return extname(last).toLowerCase();
+      if (last === '{output}') return lastOutputExt;
+      if (!last.startsWith('-') && last !== inputFile) return extname(last).toLowerCase();
     }
     return '';
   }
@@ -351,6 +347,7 @@
     // no stale command, output, or statuses around to run by accident.
     outputFile = null;
     lastArgs = null;
+    lastOutputExt = '';
     clearError();
     engineNote.textContent = '';
     if (cmdOut) cmdOut.value = '';
@@ -527,6 +524,7 @@
         // LLM failure: never execute the translation. Typed edits stay put -
         // they do not depend on the LLM and remain runnable.
         lastArgs = null;
+        lastOutputExt = '';
         paintBar(barTranslate, 0);
         setStatus(translateStatus, 'st-failed', 'Failed');
         if (res && res.raw) log('raw LLM output (truncated): ' + String(res.raw).slice(0, 800));
@@ -538,6 +536,7 @@
         return null;
       }
       lastArgs = res.args;
+      lastOutputExt = res.outputExt || '';
       if (cmdOut) cmdOut.value = 'ffmpeg ' + res.argsString;
       if (res.corrections && res.corrections.length > 0) {
         for (const c of res.corrections) log('auto-corrected: ' + c);
@@ -555,6 +554,7 @@
       return res;
     } catch (e) {
       lastArgs = null;
+      lastOutputExt = '';
       paintBar(barTranslate, 0);
       setStatus(translateStatus, 'st-failed', 'Failed');
       showError((e && e.message ? e.message : e) || 'unknown error');
@@ -609,7 +609,7 @@
     setStatus(ffmpegStatus, 'st-active', 'Running…');
     log(`running ffmpeg → ${out}…`);
     try {
-      const res = await window.api.runFfmpeg({ args, outputFile: out });
+      const res = await window.api.runFfmpeg({ args, outputFile: out, inputFile, outputExt: translatedExt() || undefined });
       if (res && res.cancelled) {
         setStatus(ffmpegStatus, 'st-cancelled', 'Cancelled');
         log('run cancelled - partial output kept.');

@@ -88,30 +88,36 @@ async function main() {
     mainMod.sanitizeModelOutput('<think>-i in.mp4 out.mkv'),
     '-i in.mp4 out.mkv'
   );
-  // missing output file is recovered deterministically (container from words/codecs)
+  // missing output file is recovered as the template token (the runner
+  // resolves it; the container comes from inferOutputExt, not a filename)
   assert.strictEqual(typeof mainMod.ensureOutputFile, 'function');
-  let eo = mainMod.ensureOutputFile(['-i', 'in.mp4', '-c:v', 'libvpx-vp9', '-an'], 'convert to webm and mute it');
-  assert.deepStrictEqual(eo.args, ['-i', 'in.mp4', '-c:v', 'libvpx-vp9', '-an', 'output.webm']);
+  let eo = mainMod.ensureOutputFile(['-i', '{input}', '-c:v', 'libvpx-vp9', '-an'], 'convert to webm and mute it');
+  assert.deepStrictEqual(eo.args, ['-i', '{input}', '-c:v', 'libvpx-vp9', '-an', '{output}']);
   assert.strictEqual(eo.corrections.length, 1);
-  eo = mainMod.ensureOutputFile(['-i', 'in.mp4', '-c:v', 'libx264'], 'make it smaller');
-  assert.deepStrictEqual(eo.args, ['-i', 'in.mp4', '-c:v', 'libx264', 'output.mp4']);
-  eo = mainMod.ensureOutputFile(['-i', 'in.mp4', 'out.mkv'], 'convert to mkv');
-  assert.deepStrictEqual(eo.args, ['-i', 'in.mp4', 'out.mkv'], 'complete commands untouched');
-  assert.strictEqual(eo.corrections.length, 0);
+  eo = mainMod.ensureOutputFile(['-i', '{input}', '-c:v', 'libx264'], 'make it smaller');
+  assert.deepStrictEqual(eo.args, ['-i', '{input}', '-c:v', 'libx264', '{output}']);
+  // a non-compliant real path is templated, not kept
+  eo = mainMod.ensureOutputFile(['-i', '{input}', 'out.mkv'], 'convert to mkv');
+  assert.deepStrictEqual(eo.args, ['-i', '{input}', '{output}'], 'real outputs become the token');
+  assert.strictEqual(eo.corrections.length, 1);
   // truncated answer ending on a valued flag: the flag is dropped so the
-  // appended output is not swallowed as its value
-  eo = mainMod.ensureOutputFile(['-i', 'in.mp4', '-c:v', 'libx264', '-movflags'], 'convert to mp4');
-  assert.deepStrictEqual(eo.args, ['-i', 'in.mp4', '-c:v', 'libx264', 'output.mp4']);
+  // appended token is not swallowed as its value
+  eo = mainMod.ensureOutputFile(['-i', '{input}', '-c:v', 'libx264', '-movflags'], 'convert to mp4');
+  assert.deepStrictEqual(eo.args, ['-i', '{input}', '-c:v', 'libx264', '{output}']);
   assert.strictEqual(eo.corrections.length, 2, 'drop plus append are both reported');
   // valueless trailing flags are complete on their own and stay
-  eo = mainMod.ensureOutputFile(['-i', 'in.mp4', '-c:v', 'libx264', '-an'], 'convert to mp4 and mute it');
-  assert.deepStrictEqual(eo.args, ['-i', 'in.mp4', '-c:v', 'libx264', '-an', 'output.mp4']);
+  eo = mainMod.ensureOutputFile(['-i', '{input}', '-c:v', 'libx264', '-an'], 'convert to mp4 and mute it');
+  assert.deepStrictEqual(eo.args, ['-i', '{input}', '-c:v', 'libx264', '-an', '{output}']);
   assert.strictEqual(eo.corrections.length, 1);
 
-  // tokenizer: quotes preserved
+  // tokenizer: quotes preserved, missing input templated
   assert.deepStrictEqual(
-    mainMod.tokenizeArgs('-y -i in.mp4 -vf "scale=-2:720" out.mp4', 'in.mp4'),
-    ['-y', '-i', 'in.mp4', '-vf', 'scale=-2:720', 'out.mp4']
+    mainMod.tokenizeArgs('-i {input} -vf "scale=-2:720" {output}'),
+    ['-i', '{input}', '-vf', 'scale=-2:720', '{output}']
+  );
+  assert.deepStrictEqual(
+    mainMod.tokenizeArgs('-c:v libx264 {output}'),
+    ['-i', '{input}', '-c:v', 'libx264', '{output}']
   );
   // correction layer: bare "360p"-style sizes must never reach ffmpeg
   assert.strictEqual(typeof mainMod.fixupArgs, 'function');
@@ -164,25 +170,20 @@ async function main() {
   assert.deepStrictEqual(nq.args, ['-i', 'in.mp4', '-t', '25', 'out.mp4'], 'partial -t untouched');
   console.log('[smoke] seek hygiene OK');
 
-  // input fixup: a literal "-i input.mp4" (or any missing file) must be
-  // replaced with the loaded video.
+  // input fixup: any `-i` value becomes the template token (resolved at
+  // run time) - real paths never survive the pipeline.
   assert.strictEqual(typeof mainMod.fixupInput, 'function');
-  let fi = mainMod.fixupInput(['-i', 'input.mp4', 'out.mkv'], 'C:\\vids\\clip.mp4');
-  assert.deepStrictEqual(fi.args, ['-i', 'C:\\vids\\clip.mp4', 'out.mkv']);
+  let fi = mainMod.fixupInput(['-i', 'input.mp4', '{output}']);
+  assert.deepStrictEqual(fi.args, ['-i', '{input}', '{output}']);
   assert.ok(fi.corrections.length === 1, 'must report the input rewrite');
-  fi = mainMod.fixupInput(['-i', 'nope-missing.mp4', 'out.mkv'], '/v/clip.mp4');
-  assert.deepStrictEqual(fi.args, ['-i', '/v/clip.mp4', 'out.mkv']);
-  const realTmp = path.join(__dirname, 'smoke-in.tmp');
-  fs.writeFileSync(realTmp, 'x');
-  try {
-    fi = mainMod.fixupInput(['-i', realTmp, 'out.mkv'], '/v/clip.mp4');
-    assert.deepStrictEqual(fi.args, ['-i', realTmp, 'out.mkv'], 'an existing -i file must be left alone');
-    assert.strictEqual(fi.corrections.length, 0);
-  } finally {
-    fs.rmSync(realTmp, { force: true });
-  }
-  fi = mainMod.fixupInput(['-i', 'input.mp4', 'out.mkv'], null);
-  assert.deepStrictEqual(fi.args, ['-i', 'input.mp4', 'out.mkv'], 'no loaded video → nothing to rewrite with');
+  fi = mainMod.fixupInput(['-i', '/v/clip.mp4', '{output}']);
+  assert.deepStrictEqual(fi.args, ['-i', '{input}', '{output}'], 'real paths are templated');
+  assert.ok(fi.corrections.length === 1, 'must report the templating');
+  fi = mainMod.fixupInput(['-i', '{input}', '{output}']);
+  assert.deepStrictEqual(fi.args, ['-i', '{input}', '{output}'], 'templated input untouched');
+  assert.strictEqual(fi.corrections.length, 0);
+  fi = mainMod.fixupInput(['-c:v', 'libx264', '{output}']);
+  assert.deepStrictEqual(fi.args, ['-i', '{input}', '-c:v', 'libx264', '{output}'], 'missing -i inserted');
   // "trim the last N seconds" = CUT them (removal): keep [0, D-N]
   assert.strictEqual(typeof mainMod.fixupLastTrim, 'function');
   assert.strictEqual(typeof mainMod.probeMedia, 'function');
@@ -467,22 +468,23 @@ async function main() {
   assert.ok(!gf.args.includes('-c:v') && !gf.args.includes('libx264'), 'gif uses its default encoder');
   gf = mainMod.fixupGif(['-i', 'in.mp4', 'out.mp4'], 'convert to mp4');
   assert.deepStrictEqual(gf.args, ['-i', 'in.mp4', 'out.mp4'], 'non-gif untouched');
-  // thumbnail: time, frame, container, no bitrate
+  // thumbnail: time, frame, no bitrate (container comes from
+  // inferOutputExt - the token itself is never rewritten)
   assert.strictEqual(typeof mainMod.fixupThumbnail, 'function');
   assert.strictEqual(mainMod.parseThumbTime('thumbnail at 10 seconds', 60), '10');
   assert.strictEqual(mainMod.parseThumbTime('thumbnail', 60), '30', 'bare thumbnail uses the middle');
-  let   th = mainMod.fixupThumbnail(['-i', 'in.mp4', '-c:v', 'libx264', 'out.mp4'], 'thumbnail at 10 seconds', 60);
-  assert.deepStrictEqual(th.args, ['-i', 'in.mp4', '-ss', '10', '-frames:v', '1', 'out.png']);
-  th = mainMod.fixupThumbnail(['-i', 'in.mp4', '-b:v', '1000k', 'out.mp4'], 'poster frame', 60);
-  assert.ok(!th.args.includes('-b:v') && th.args[th.args.length - 1] === 'out.png', 'still has no bitrate, uses an image container');
+  let   th = mainMod.fixupThumbnail(['-i', 'in.mp4', '-c:v', 'libx264', '{output}'], 'thumbnail at 10 seconds', 60);
+  assert.deepStrictEqual(th.args, ['-i', 'in.mp4', '-ss', '10', '-frames:v', '1', '{output}']);
+  th = mainMod.fixupThumbnail(['-i', 'in.mp4', '-b:v', '1000k', '{output}'], 'poster frame', 60);
+  assert.ok(!th.args.includes('-b:v') && th.args[th.args.length - 1] === '{output}', 'still has no bitrate, keeps the token');
   // an explicit video codec would corrupt the still - the container decides
-  th = mainMod.fixupThumbnail(['-i', 'in.mp4', '-c:v', 'libx264', 'out.mp4'], 'thumbnail at 10 seconds', 60);
-  assert.deepStrictEqual(th.args, ['-i', 'in.mp4', '-ss', '10', '-frames:v', '1', 'out.png']);
-  th = mainMod.fixupThumbnail(['-i', 'in.mp4', 'out.mp4'], 'convert to mp4', 60);
-  assert.deepStrictEqual(th.args, ['-i', 'in.mp4', 'out.mp4'], 'non-thumbnail untouched');
-  // truncated answer ending on -frames:v: the appended still is not its value
-  const dangling = mainMod.ensureOutputFile(['-i', '/v/clip.mp4', '-c:v', 'libx264', '-frames:v'], 'thumbnail as png');
-  assert.deepStrictEqual(dangling.args, ['-i', '/v/clip.mp4', '-c:v', 'libx264', 'output.png']);
+  th = mainMod.fixupThumbnail(['-i', 'in.mp4', '-c:v', 'libx264', '{output}'], 'thumbnail at 10 seconds', 60);
+  assert.deepStrictEqual(th.args, ['-i', 'in.mp4', '-ss', '10', '-frames:v', '1', '{output}']);
+  th = mainMod.fixupThumbnail(['-i', 'in.mp4', '{output}'], 'convert to mp4', 60);
+  assert.deepStrictEqual(th.args, ['-i', 'in.mp4', '{output}'], 'non-thumbnail untouched');
+  // truncated answer ending on -frames:v: the appended token is not its value
+  const dangling = mainMod.ensureOutputFile(['-i', '{input}', '-c:v', 'libx264', '-frames:v'], 'thumbnail as png');
+  assert.deepStrictEqual(dangling.args, ['-i', '{input}', '-c:v', 'libx264', '{output}']);
   assert.strictEqual(dangling.corrections.length, 2, 'dangling flag drop plus output append are both reported');
   // remux intent drops filters instead of replacing the codec
   const rx = mainMod.fixupConflicts(['-i', 'in.mp4', '-vf', 'scale=-2:720', '-c:v', 'copy', '-c:a', 'copy', 'out.mp4'],
@@ -509,14 +511,29 @@ async function main() {
   assert.ok(cf.args.includes('libx264') && !cf.args.includes('copy'), 'trim+copy must re-encode');
   cf = mainMod.fixupConflicts(['-i', 'in.mp4', '-c:v', 'copy', 'out.mp4'], 'keep the last 5 seconds without re-encoding');
   assert.ok(cf.args.includes('copy'), 'explicit remux keeps copy even with a trim');
-  // output directory follows the input folder, never the prompt examples
-  assert.strictEqual(typeof mainMod.fixupOutputDir, 'function');
-  assert.strictEqual(fixupsMod.fixupOutputDir, mainMod.fixupOutputDir, 'fixups must be the same functions main re-exports');
-  let od = mainMod.fixupOutputDir(['-i', 'C:\\vids\\clip.mp4', '/tmp/clip-out.mp4'], 'C:\\vids\\clip.mp4');
-  assert.deepStrictEqual(od.args, ['-i', 'C:\\vids\\clip.mp4', 'C:\\vids\\clip-out.mp4']);
-  assert.strictEqual(od.corrections.length, 1, 'wrong output dir must be reported');
-  od = mainMod.fixupOutputDir(['-i', '/v/clip.mp4', 'clip-out.mp4'], '/v/clip.mp4');
-  assert.deepStrictEqual(od.args, ['-i', '/v/clip.mp4', 'clip-out.mp4'], 'bare placeholders stay bare');
+  // output-dir fixup is gone with templated outputs (nothing has a
+  // directory until the runner resolves the tokens).
+  assert.strictEqual(mainMod.fixupOutputDir, undefined, 'output-dir fixup must be removed');
+  // container inference: the token carries no extension, so instruction
+  // words (then codec hints) decide it.
+  assert.strictEqual(typeof mainMod.inferOutputExt, 'function');
+  assert.strictEqual(fixupsMod.inferOutputExt, mainMod.inferOutputExt, 'fixups must be the same functions main re-exports');
+  assert.strictEqual(mainMod.inferOutputExt([], 'convert to mkv'), '.mkv');
+  assert.strictEqual(mainMod.inferOutputExt([], 'convert to webm'), '.webm');
+  assert.strictEqual(mainMod.inferOutputExt([], 'convert to mp4'), '.mp4');
+  assert.strictEqual(mainMod.inferOutputExt([], 'convert to gif'), '.gif');
+  assert.strictEqual(mainMod.inferOutputExt([], 'extract the audio as mp3'), '.mp3');
+  assert.strictEqual(mainMod.inferOutputExt([], 'thumbnail at 10 seconds'), '.png');
+  assert.strictEqual(mainMod.inferOutputExt([], 'thumbnail as jpg'), '.jpg');
+  assert.strictEqual(mainMod.inferOutputExt([], 'convert it'), '.mp4');
+  assert.strictEqual(mainMod.inferOutputExt(['-c:v', 'libvpx-vp9'], 'convert it'), '.webm', 'codec hints still apply');
+  // run-time substitution of both tokens with the run's real paths.
+  assert.strictEqual(typeof mainMod.resolvePlaceholders, 'function');
+  assert.strictEqual(fixupsMod.resolvePlaceholders, mainMod.resolvePlaceholders, 'fixups must be the same functions main re-exports');
+  let rp = mainMod.resolvePlaceholders(['-i', '{input}', '-c:v', 'libx264', '{output}'], '/v/clip.mp4', '/v/clip-out.mkv');
+  assert.deepStrictEqual(rp, ['-i', '/v/clip.mp4', '-c:v', 'libx264', '/v/clip-out.mkv']);
+  rp = mainMod.resolvePlaceholders(['-i', '{input}', '{output}'], null, null);
+  assert.deepStrictEqual(rp, ['-i', '{input}', '{output}'], 'missing paths leave tokens for the caller to report');
   // pipeline order: contradictions stripped and output ensured before any
   // insertion, so flag/value pairs stay adjacent (insertions slot before output)
   // The runner owns the fixed order - tests go through it so the order
@@ -531,7 +548,7 @@ async function main() {
     'convert to webm below 50MB and mute it', 60
   );
   assert.ok(!pr.includes('-pass') && !pr.includes('1'), 'no orphan pass value: ' + pr.join(' '));
-  assert.ok(pr.includes('-an') && pr[pr.length - 1] === 'output.webm', 'mute intact, output kept');
+  assert.ok(pr.includes('-an') && pr[pr.length - 1] === '{output}', 'mute intact, output token kept');
   assert.strictEqual(pr[pr.indexOf('-b:v') + 1], '6850k', 'size cap value stays paired with its flag');
   // size limits: parsing, math, and single-pass enforcement
   assert.strictEqual(typeof mainMod.parseSizeLimit, 'function');
@@ -579,7 +596,7 @@ async function main() {
   const { TRANSLATE_CASES } = require('./translate-cases.js');
   for (const c of TRANSLATE_CASES) {
     const cleaned = mainMod.sanitizeModelOutput(c.modelRaw);
-    const tokens = mainMod.tokenizeArgs(cleaned, c.inputFile || '/v/clip.mp4');
+    const tokens = mainMod.tokenizeArgs(cleaned);
     const composed = mainMod.runTranslationPipeline(tokens, {
       instruction: c.instruction, inputFile: c.inputFile || '/v/clip.mp4', duration: c.duration,
     });
@@ -1403,10 +1420,17 @@ async function main() {
   assert.ok(mainMod.SYSTEM_PROMPT.includes('libvpx-vp9'), 'prompt must pin webm codecs');
   assert.ok(mainMod.SYSTEM_PROMPT.includes('libx265'), 'prompt must cover h265');
   assert.ok(mainMod.SYSTEM_PROMPT.includes('EXAMPLES'), 'prompt must carry few-shot examples');
-  assert.ok(mainMod.SYSTEM_PROMPT.includes('Never invent'), 'prompt must forbid inventing paths');
+  assert.ok(mainMod.SYSTEM_PROMPT.includes('never a real path'), 'prompt must forbid real paths');
   assert.ok(mainMod.SYSTEM_PROMPT.includes('non-thinking mode'), 'prompt must disable Qwen3 thinking traces');
-  assert.ok(mainMod.SYSTEM_PROMPT.includes('must match the input file directory'), 'prompt must keep outputs out of /tmp');
-  assert.ok(!mainMod.SYSTEM_PROMPT.includes('/tmp/in.mp4'), 'prompt examples must not teach the /tmp directory');
+  assert.ok(mainMod.SYSTEM_PROMPT.includes('-i {input}'), 'prompt must teach the input token');
+  assert.ok(mainMod.SYSTEM_PROMPT.includes('{output}'), 'prompt must teach the output token');
+  assert.ok(!mainMod.SYSTEM_PROMPT.includes('/tmp/in.mp4') && !mainMod.SYSTEM_PROMPT.includes('/vids/in.mp4'), 'prompt examples must not teach real directories');
+  // template plumbing: the box shows tokens, the run resolves them.
+  assert.ok(renderer.includes('{output}'), 'renderer must handle the templated output token');
+  assert.ok(renderer.includes('lastOutputExt'), 'renderer must carry the translated container');
+  assert.ok(renderer.includes('outputExt'), 'run must pass the translated container for enforcement');
+  assert.ok(mainSrc.includes("'{input}'"), 'runner must resolve the input token');
+  assert.ok(mainSrc.includes("'{output}'"), 'runner must resolve the output token');
   // trim arithmetic belongs to the trimming section, stated once (a 1.7B
   // model obeys coherent sections better than scattered rules).
   const timeSection = llmSrc.indexOf('TIME AND TRIMMING');

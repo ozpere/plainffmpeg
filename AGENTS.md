@@ -51,30 +51,32 @@ models/                  Weights only (gitignored). Keep models/.gitkeep.
 
 ## Translation pipeline (`src/fixups.js`, order fixed in `runTranslationPipeline`, called by `handleTranslatePrompt` in `src/main.js`)
 
-Order is fixed in `runTranslationPipeline`:
+Order is fixed in `runTranslationPipeline` (path-free: the model speaks only
+`-i {input}` and a trailing `{output}`, resolved to real paths at run time):
 
 1. `sanitizeModelOutput` - strip think traces/fences/backticks, rejoin lines, drop prose, require `-i`. Pure prose throws.
-2. `tokenizeArgs` - shell-aware split, preserves quotes.
+2. `tokenizeArgs` - shell-aware split, preserves quotes. Inserts `-i {input}` when missing.
 3. `fixupArgs` - rewrite invalid sizes: `-s 360p` and `scale=720p` become `scale=-2:H`. Merge into existing `-vf`; merge duplicate `-vf` chains (ffmpeg keeps only the last one). `fixupDedupeSeek` collapses repeated `-ss`/`-t` to the first (ffmpeg honors one seek).
 4. Filter construction (`fixupSpeed`, `fixupFps`, `fixupWidthScale`, `fixupRotate`, `fixupVolume`, `fixupGif`) - runs BEFORE conflicts so the copy+filter fix sees every filter. Speed normalizes `setpts` and derives a matching `atempo` chain (muted needs no audio side); fps caps via `fps=N`; width enforces `scale=W:-2` (W evened down, replaces other scales); rotate applies `transpose`/`hflip`/`vflip`; volume applies `-af volume=V`; gif fills `fps`/`scale` defaults, forces `-an`, and drops explicit video encoders (gif takes only its default). Exact speed numbers are also pre-computed into the prompt (`Speed: ...`).
-5. `fixupInput` - replace placeholder/missing `-i` (e.g. `input.mp4`) with the loaded video path. Existing real file is untouched.
+5. `fixupInput` - normalize any `-i` value to `{input}` (real paths never survive), insert `-i {input}` when missing. No filesystem, no input path.
 6. `fixupConflicts` - strip `-pass`/`-passlogfile` (single-shot runner), drop audio flags under `-an`, fix `-c:v copy` + video filters via container-aware codec (explicit remux intent drops the filters and keeps `copy` instead) and re-encode `-c:v copy` under a trim intent (cuts land between keyframes; remux keeps `copy`). Needs instruction words, not the output token.
-7. `ensureOutputFile` - drop trailing valued flags left by truncation (else the output is swallowed as a flag value), then append `output.<ext>` if missing. Ext comes from instruction words, else codec hints, else `.mp4`. Runs BEFORE trim/size so their insertions slot before a real trailing output (never split a flag/value pair).
-8. `fixupOutputDir` - rewrite an explicit output directory that differs from the input folder to the input folder (keeps basename/ext, handles `/` vs `\`). Bare filenames stay bare. Translation pipeline only, never the editable custom box.
-9. `fixupLastTrim` - needs `duration`. "trim/cut/remove the last N" keeps `[0, D-N]` via `-t`. "keep/extract only the last N" always normalizes to `-ss D-N`, no `-t`.
-10. `fixupMiddleTrim` - needs `duration`. "keep/extract the middle N" keeps the center cut `[(D-N)/2, (D-N)/2+N]` via `-ss S -t N`. Exact numbers are also pre-computed into the prompt (`Center cut: ...`), same pattern as size limits.
-11. `fixupFirstTrim` - no `duration` needed. "keep the first N" keeps `[0, N]` via `-t N` (strips `-ss`); "remove the first N" keeps `[N, end]` via `-ss N` (drops `-t`).
-12. `fixupRangeTrim` - no `duration` needed. "keep from A to B" keeps `[A, B]` via `-ss A -t (B-A)`. Exact numbers are also pre-computed into the prompt (`Range: ...`).
-13. `fixupNoopSeek` - no trim intent: drop `-ss 0` always and `-t` at full duration under 1x speed (model noise). Kept under speed changes (would truncate) and never eats the thumbnail seek (runs before it).
-14. `fixupSizeLimit` - "below 2GB / under 500MB" enforces single-pass capped bitrate `-b:v Xk -maxrate Xk -bufsize 2Xk`, audio bounded to `-c:a aac -b:a 128k` (oversized `-b:a` is capped), budgeted against the speed-adjusted duration. Never two-pass. `-an` stays muted.
-15. `fixupThumbnail` - runs last: `-ss T -frames:v 1`, image container (`.png`, `.jpg` on request), drops bitrate flags and explicit video encoders. Defers seeking to a trim when one is present.
+7. `ensureOutputFile` - drop trailing valued flags left by truncation (else the token is swallowed as a flag value), then ensure the trailing `{output}` (real filenames are templated, a missing token is appended). Carries no extension logic.
+8. `fixupLastTrim` - needs `duration`. "trim/cut/remove the last N" keeps `[0, D-N]` via `-t`. "keep/extract only the last N" always normalizes to `-ss D-N`, no `-t`.
+9. `fixupMiddleTrim` - needs `duration`. "keep/extract the middle N" keeps the center cut `[(D-N)/2, (D-N)/2+N]` via `-ss S -t N`. Exact numbers are also pre-computed into the prompt (`Center cut: ...`), same pattern as size limits.
+10. `fixupFirstTrim` - no `duration` needed. "keep the first N" keeps `[0, N]` via `-t N` (strips `-ss`); "remove the first N" keeps `[N, end]` via `-ss N` (drops `-t`).
+11. `fixupRangeTrim` - no `duration` needed. "keep from A to B" keeps `[A, B]` via `-ss A -t (B-A)`. Exact numbers are also pre-computed into the prompt (`Range: ...`).
+12. `fixupNoopSeek` - no trim intent: drop `-ss 0` always and `-t` at full duration under 1x speed (model noise). Kept under speed changes (would truncate) and never eats the thumbnail seek (runs before it).
+13. `fixupSizeLimit` - "below 2GB / under 500MB" enforces single-pass capped bitrate `-b:v Xk -maxrate Xk -bufsize 2Xk`, audio bounded to `-c:a aac -b:a 128k` (oversized `-b:a` is capped), budgeted against the speed-adjusted duration. Never two-pass. `-an` stays muted.
+14. `fixupThumbnail` - runs last: `-ss T -frames:v 1`, drops bitrate flags and explicit video encoders (the image container picks its encoder). Defers seeking to a trim when one is present. Never touches `{output}` - the container comes from `inferOutputExt`.
+
+Container and substitution live outside the flag pipeline: `inferOutputExt` derives the container from instruction words (thumbnail/gif own theirs), then codec hints, else `.mp4` - it drives the `outputExt` translation metadata and the output picker. `resolvePlaceholders` substitutes both tokens with the run's real paths at run time (total: unprovided paths leave the token so the runner reports exactly what is missing).
 
 ## Critical invariants
 
 - No silent fallbacks anywhere. LLM failure returns `{ ok: false, error, diag, errorKind }` (plus `raw` for the logs and `hint` for `msvc-missing`) and UI shows banner. Never run a guessed command. `fallbackTranslate` must not exist.
 - `-y` is forced at run time (`finalArgs.unshift('-y')`). Overwrite consent is asked beforehand via in-app modal.
-- Output extension always follows the effective container (`enforceOutputExtension`, `coerceExt`). `defaultOutputPath` is `<name>-out.<ext>` next to input, `<name>-out.ext` before translation. Never guess a container. The editable `#cmdOut` box wins over the stored translation for Run and extension; it runs as-is (only `-y` plus extension are enforced) and must contain `-i`.
-- Probe uses `ffmpeg -i` stderr parse (no ffprobe dep). `run-ffmpeg` replaces trailing output token with explicit `outputFile`.
+- Output extension always follows the effective container (`inferOutputExt` from instruction words/codec hints, surfaced as `outputExt`; `enforceOutputExtension`, `coerceExt`). `defaultOutputPath` is `<name>-out.<ext>` next to input, `<name>-out.ext` before translation. Never guess a container. The editable `#cmdOut` box shows the template (`-i {input}`, trailing `{output}`) and wins over the stored translation for Run and extension; it runs as-is (only `-y` plus extension are enforced) and must contain `-i`.
+- Probe uses `ffmpeg -i` stderr parse (no ffprobe dep). `run-ffmpeg` resolves `{input}`/`{output}` to the run's input/output paths first (missing paths fail loudly), then replaces the trailing output token with the explicit `outputFile`.
 - `resolveModelPath` honors `MODEL_PATH` env. Portable branch is deliberately short: exe-side `PlainFFmpegData` home, then per-user data dir as the LAST fallback (nothing after it). Other flows: preferred write target, then any dir holding an existing download, then Qwen alias filenames.
 - Thin installer: no `*.gguf` is ever bundled (`build.files` excludes models). First launch shows `#modelDl`; `download-model` IPC streams `model-download-progress` and warms the engine on success.
 - `llamaDiagnostics` + `llamaPrebuiltProbe` must keep working: they turn load failures into a pasteable answer. Keep `handleModelStatus` fields stable: `ready, loading, loadError, loadErrorKind, msvc, exists, size, engine, portable, fallbackToAppData, portableWritable` (`portableWritable` is null outside portable runs; false means the exe folder cannot take the model, true means an app-data model is simply being reused).
@@ -112,6 +114,7 @@ Order is fixed in `runTranslationPipeline`:
 ## Adding a fixup
 
 - Pure function `(args, instruction, ...) => { args, corrections }`. Never throw, never silently drop flags. Push a human-readable string per rewrite (surfaced in logs).
+- Keep the pipeline path-free: normalize to `{input}`/`{output}`, never read real paths (substitution happens at run time via `resolvePlaceholders`).
 - Philosophy is aggressive normalization: any recognizable intent is rewritten to exactly the right flags (logged), ambiguous output is left alone.
 - Trim intents go through `parseTrimIntent` (mutually exclusive by construction) and duration-gated kinds through `trimNeedsDuration`; the renderer gate duplicates that list, so update the parity assert too.
 - Filter layers run before `fixupConflicts` in `runTranslationPipeline` (so copy+filter is caught); output-affecting layers run after `ensureOutputFile`.
