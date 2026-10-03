@@ -35,7 +35,7 @@ jobs:
       - name: Upload installer
         uses: actions/upload-artifact@v4
         with:
-          name: PlainFFmpeg-Setup
+          name: PlainFFmpeg-Windows-Setup
           path: dist/*Setup*.exe
           # Tag runs attach the files to a permanent Release instead (release
           # assets do not consume Actions storage); keep those artifacts only
@@ -44,7 +44,7 @@ jobs:
       - name: Upload portable
         uses: actions/upload-artifact@v4
         with:
-          name: PlainFFmpeg-Portable
+          name: PlainFFmpeg-Windows-Portable
           path: dist/*Portable*.exe
           retention-days: ${{ github.ref_type == 'tag' && 1 || 14 }}
 

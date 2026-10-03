@@ -448,7 +448,7 @@
         setModelDlVisible(false);
         modelDownloading = false;
         setBadge('ready', `Engine: ${s.engine} · ${(s.size / 1e6).toFixed(1)} MB`);
-        if (engineNote.textContent.startsWith('LLM failed to load') || engineNote.textContent.startsWith('Last LLM load failed')) {
+        if (engineNote.textContent.startsWith('Local LLM failed to load') || engineNote.textContent.startsWith('Last LLM load failed')) {
           engineNote.textContent = '';
           engineNote.classList.remove('error');
         }
@@ -456,7 +456,7 @@
         // A fetch in flight creates its partial file fast - do not yank its
         // progress card away for a generic "not loaded yet".
         if (!modelDownloading) setModelDlVisible(false);
-        setBadge('loading', 'Loading LLM engine locally…');
+        setBadge('loading', 'Loading local LLM engine…');
         repollMs = 2000;
       } else if (s.exists && s.loadError && !s.loading) {
         // Failed load: keep a way back visible. A corrupt model can be
@@ -467,16 +467,16 @@
           if (modelDlBtn) modelDlBtn.disabled = false;
           if (modelDlStatus) modelDlStatus.textContent = 'Translation unavailable - see logs below. Re-download replaces the model file if it is corrupt.';
         }
-        setBadge('error', `Engine: ${s.engine || 'LLM failed to load'}`);
-        engineNote.textContent = `LLM failed to load - nothing will translate until this is fixed. ${prettyLlmError(s.loadError)}`;
+        setBadge('error', `Engine: ${s.engine || 'Local LLM failed to load'}`);
+        engineNote.textContent = `Local LLM failed to load - nothing will translate until this is fixed. ${prettyLlmError(s.loadError)}`;
         engineNote.classList.add('error');
         repollMs = 10000;
       } else if (s.exists) {
         setModelDlVisible(false);
-        setBadge('warn', 'LLM not loaded yet - it loads on first translation');
+        setBadge('warn', 'Local LLM not loaded yet - it loads on first translation');
         repollMs = 3000;
       } else {
-        setBadge('warn', 'Engine: LLM unavailable - download the model below');
+        setBadge('warn', 'Engine: Local LLM unavailable - download the model below');
         setModelDlVisible(true);
         repollMs = 10000;
       }

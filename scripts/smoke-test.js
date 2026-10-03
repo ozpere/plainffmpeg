@@ -504,6 +504,19 @@ async function main() {
   cf = mainMod.fixupConflicts(['-i', 'in.mp4', '-c:v', 'libx264', '-c:a', 'aac', 'out.mp4']);
   assert.deepStrictEqual(cf.args, ['-i', 'in.mp4', '-c:v', 'libx264', '-c:a', 'aac', 'out.mp4']);
   assert.strictEqual(cf.corrections.length, 0, 'sane commands untouched');
+  // trim on stream-copy re-encodes (cuts land between keyframes); remux keeps copy
+  cf = mainMod.fixupConflicts(['-i', 'in.mp4', '-c:v', 'copy', '-c:a', 'aac', 'out.mp4'], 'keep the last 5 seconds');
+  assert.ok(cf.args.includes('libx264') && !cf.args.includes('copy'), 'trim+copy must re-encode');
+  cf = mainMod.fixupConflicts(['-i', 'in.mp4', '-c:v', 'copy', 'out.mp4'], 'keep the last 5 seconds without re-encoding');
+  assert.ok(cf.args.includes('copy'), 'explicit remux keeps copy even with a trim');
+  // output directory follows the input folder, never the prompt examples
+  assert.strictEqual(typeof mainMod.fixupOutputDir, 'function');
+  assert.strictEqual(fixupsMod.fixupOutputDir, mainMod.fixupOutputDir, 'fixups must be the same functions main re-exports');
+  let od = mainMod.fixupOutputDir(['-i', 'C:\\vids\\clip.mp4', '/tmp/clip-out.mp4'], 'C:\\vids\\clip.mp4');
+  assert.deepStrictEqual(od.args, ['-i', 'C:\\vids\\clip.mp4', 'C:\\vids\\clip-out.mp4']);
+  assert.strictEqual(od.corrections.length, 1, 'wrong output dir must be reported');
+  od = mainMod.fixupOutputDir(['-i', '/v/clip.mp4', 'clip-out.mp4'], '/v/clip.mp4');
+  assert.deepStrictEqual(od.args, ['-i', '/v/clip.mp4', 'clip-out.mp4'], 'bare placeholders stay bare');
   // pipeline order: contradictions stripped and output ensured before any
   // insertion, so flag/value pairs stay adjacent (insertions slot before output)
   // The runner owns the fixed order - tests go through it so the order
@@ -663,7 +676,7 @@ async function main() {
   assert.ok(renderer.includes('NoBinaryFoundError'), 'binary-missing must have a friendly message');
   assert.ok(renderer.includes('Visual C++ Redistributable'), 'binary-missing must name the redistributable');
   assert.ok(renderer.includes('portable build does not install it'), 'portable must explain the missing system step');
-  assert.ok(renderer.includes('LLM failed to load'), 'failed loads must name the failure, not promise a retry');
+  assert.ok(renderer.includes('Local LLM failed to load'), 'failed loads must name the failure, not promise a retry');
   assert.ok(!renderer.includes('Last LLM load failed - will retry on first translation'), 'misleading retry line must be gone');
   assert.ok(renderer.includes('showBanner'), 'errors must surface through the themed banner');
   // empty instruction must be visible, not a hidden log line.
@@ -770,10 +783,10 @@ async function main() {
   assert.ok(st.msvc && typeof st.msvc.present === 'boolean', 'status must expose the MSVC runtime state');
   assert.strictEqual(st.ready, false, 'ready must be false before any session exists');
   assert.strictEqual(st.portableWritable, null, 'writability is null outside portable runs');
-  assert.ok(renderer.includes('Loading LLM engine locally'), 'badge must show background loading');
-  assert.ok(renderer.includes('LLM failed to load'), 'failed loads must explain themselves in the UI');
+  assert.ok(renderer.includes('Loading local LLM engine'), 'badge must show background loading');
+  assert.ok(renderer.includes('Local LLM failed to load'), 'failed loads must explain themselves in the UI');
   assert.ok(renderer.includes('nothing will translate until this is fixed'), 'failed badge must not promise a load');
-  assert.ok(mainSrc.includes("'LLM failed to load'"), 'failed engine copy must exist in main');
+  assert.ok(mainSrc.includes("'Local LLM failed to load'"), 'failed engine copy must exist in main');
   // single status loop: the download nudge must not fork a second chain.
   assert.ok(renderer.includes('scheduleRefresh'), 'status polls must go through one cancellable timer');
   assert.ok(renderer.includes('scheduleRefresh(repollMs)'), 'poll loop must reschedule through the single timer');
@@ -804,7 +817,7 @@ async function main() {
       const stFailed = mainMod.handleModelStatus();
       assert.strictEqual(stFailed.exists, true, 'temp model must count as existing');
       assert.ok(stFailed.loadError, 'previous load failure must still be recorded');
-      assert.strictEqual(stFailed.engine, 'LLM failed to load', 'failed state must not claim "not loaded yet"');
+      assert.strictEqual(stFailed.engine, 'Local LLM failed to load', 'failed state must not claim "not loaded yet"');
       assert.strictEqual(stFailed.loadErrorKind, 'load-failed', 'non-MSVC failure must classify as load-failed');
     } finally {
       if (prevModelPath === undefined) delete process.env.MODEL_PATH;
@@ -814,11 +827,15 @@ async function main() {
   }
   console.log('[smoke] background preload OK');
 
-  // badge copy: capitalized Engine, proper-case states
+  // badge copy: capitalized Engine, every state names the local LLM
   assert.ok(renderer.includes('Engine: ${s.engine}'), 'badge must read "Engine: …"');
-  assert.ok(renderer.includes('Loading LLM engine locally'), 'badge loading copy');
+  assert.ok(renderer.includes('Loading local LLM engine'), 'badge loading copy');
+  assert.ok(renderer.includes('Local LLM not loaded yet'), 'badge idle copy must name the local LLM');
+  assert.ok(renderer.includes('Local LLM unavailable'), 'badge missing copy must name the local LLM');
   assert.ok(!renderer.includes('engine: ${s.engine}'), 'lowercase badge prefix must be gone');
-  assert.ok(mainSrc.includes("'Loading LLM engine locally…'"), 'main status copy');
+  assert.ok(mainSrc.includes("'Loading local LLM engine…'"), 'main status copy');
+  assert.ok(mainSrc.includes("'Local LLM unavailable'"), 'main missing copy must name the local LLM');
+  assert.ok(mainSrc.includes("'Local LLM not loaded'"), 'main idle copy must name the local LLM');
   assert.ok(!mainSrc.includes('LLM UNAVAILABLE') && !mainSrc.includes('LLM NOT LOADED'), 'shouting status must be gone');
   // overwrite consent + copy
   assert.ok(!mainSrc.includes('handleConfirmOverwrite'), 'native confirm dialog must be gone');
@@ -857,11 +874,14 @@ async function main() {
     renderer.indexOf('getDroppedPath(files[0])') < renderer.indexOf('pathsFromUriList(e.dataTransfer)'),
     'native path must precede uri-list and bytes fallbacks'
   );
-  // environment failures get plain-language hints, not bare exit codes
+  // environment and input failures get plain-language hints, not bare exit codes
   assert.strictEqual(typeof mainMod.ffmpegFailureHint, 'function');
   const oomHint = mainMod.ffmpegFailureHint('x264 [error]: malloc of size 44008576 failed\nCannot allocate memory');
   assert.ok(oomHint && oomHint.includes('out of memory'), 'OOM must be diagnosed');
   assert.ok(oomHint.includes('1080p'), 'OOM hint must suggest a smaller target');
+  const decodeHint = mainMod.ffmpegFailureHint('Error submitting packet to decoder: Failed to decode frame: Corrupt frame detected');
+  assert.ok(decodeHint && decodeHint.includes('stream-copy'), 'decode noise must point at stream-copy cuts');
+  assert.ok(decodeHint.includes('damaged'), 'decode hint must name a corrupt input as the other cause');
   assert.strictEqual(mainMod.ffmpegFailureHint('Invalid frame size: 360p'), null, 'ordinary errors get no hint');
   assert.ok(renderer.includes("terminal.hidden = false"), 'failures must auto-expand the logs');
   console.log('[smoke] failure UX OK');
@@ -932,6 +952,10 @@ async function main() {
   // Releases on tags only, never on manual runs
   const workflow = fs.readFileSync(path.join(__dirname, '../.github/workflows/release.yml'), 'utf8');
   assert.ok(workflow.includes('retention-days'), 'artifacts must expire instead of piling up');
+  assert.ok(workflow.includes('PlainFFmpeg-Windows-Setup'), 'windows installer artifact must name Windows');
+  assert.ok(workflow.includes('PlainFFmpeg-Windows-Portable'), 'windows portable artifact must name Windows');
+  assert.ok(!workflow.includes('name: PlainFFmpeg-Setup\n'), 'unnamed-OS setup artifact must be gone');
+  assert.ok(!workflow.includes('name: PlainFFmpeg-Portable\n'), 'unnamed-OS portable artifact must be gone');
   assert.ok(workflow.includes('softprops/action-gh-release'), 'tags must publish a Release');
   assert.ok(workflow.includes("github.ref_type == 'tag'"), 'publishing must be tag-only');
   assert.ok(workflow.includes('cache: npm'), 'CI must cache npm to cut flake surface');
@@ -1348,8 +1372,10 @@ async function main() {
     assert.ok(!content.includes(bannedDash), `${f} must not contain em-dashes`);
   }
   // loading badge copy (no trailing "you can already type")
-  assert.ok(renderer.includes("'Loading LLM engine locally…'"), 'badge loading copy');
+  assert.ok(renderer.includes("'Loading local LLM engine…'"), 'badge loading copy');
   assert.ok(!renderer.includes('you can already type'), 'badge must not nag');
+  // decode floods stay readable: repeated ffmpeg lines collapse to one marker
+  assert.ok(mainSrc.includes('identical lines'), 'run must collapse consecutive duplicate ffmpeg lines');
   // collapsible logs, collapsed by default
   assert.ok(html.includes('id="toggleLogsBtn"'), 'logs toggle must exist');
   assert.ok(/<pre id="terminal" class="terminal" hidden>/.test(html), 'terminal must start collapsed');
@@ -1379,6 +1405,8 @@ async function main() {
   assert.ok(mainMod.SYSTEM_PROMPT.includes('EXAMPLES'), 'prompt must carry few-shot examples');
   assert.ok(mainMod.SYSTEM_PROMPT.includes('Never invent'), 'prompt must forbid inventing paths');
   assert.ok(mainMod.SYSTEM_PROMPT.includes('non-thinking mode'), 'prompt must disable Qwen3 thinking traces');
+  assert.ok(mainMod.SYSTEM_PROMPT.includes('must match the input file directory'), 'prompt must keep outputs out of /tmp');
+  assert.ok(!mainMod.SYSTEM_PROMPT.includes('/tmp/in.mp4'), 'prompt examples must not teach the /tmp directory');
   // trim arithmetic belongs to the trimming section, stated once (a 1.7B
   // model obeys coherent sections better than scattered rules).
   const timeSection = llmSrc.indexOf('TIME AND TRIMMING');

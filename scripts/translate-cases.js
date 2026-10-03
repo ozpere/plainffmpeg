@@ -301,6 +301,21 @@ const TRANSLATE_CASES = [
     expectedArgs: ['-i', '/v/clip.mp4', '-vf', 'setpts=2*PTS', '-af', 'atempo=0.5', '-t', '60', '-c:v', 'libx264', '-c:a', 'aac',
       '-b:v', '6722k', '-maxrate', '6722k', '-bufsize', '13444k', 'clip-out.mp4'],
   },
+  {
+    name: 'output directory follows the input folder',
+    instruction: 'Convert to mp4',
+    duration: 30,
+    inputFile: 'C:\\vids\\clip.mp4',
+    modelRaw: '-i input.mp4 -c:v libx264 /tmp/clip-out.mp4',
+    expectedArgs: ['-i', 'C:\\vids\\clip.mp4', '-c:v', 'libx264', 'C:\\vids\\clip-out.mp4'],
+  },
+  {
+    name: 'trim on stream-copy re-encodes',
+    instruction: 'keep the last 5 seconds',
+    duration: 27.49,
+    modelRaw: '-i input.mp4 -c:v copy -c:a aac clip-out.mp4',
+    expectedArgs: ['-i', '/v/clip.mp4', '-c:v', 'libx264', '-c:a', 'aac', '-ss', '22.49', 'clip-out.mp4'],
+  },
 ];
 
 module.exports = { TRANSLATE_CASES };

@@ -35,6 +35,7 @@ const {
   fixupSizeLimit,
   fixupConflicts,
   ensureOutputFile,
+  fixupOutputDir,
   parseSizeLimit,
   parseHMS,
   fmtSec,
@@ -313,10 +314,10 @@ function handleModelStatus() {
   const msvcMissing = !!(failed && isMsvcMissingError(loadError));
   let engine;
   if (ready) engine = 'node-llama-cpp (local GGUF)';
-  else if (!exists) engine = 'LLM unavailable';
-  else if (loading) engine = 'Loading LLM engine locally…';
-  else if (failed) engine = 'LLM failed to load';
-  else engine = 'LLM not loaded';
+  else if (!exists) engine = 'Local LLM unavailable';
+  else if (loading) engine = 'Loading local LLM engine…';
+  else if (failed) engine = 'Local LLM failed to load';
+  else engine = 'Local LLM not loaded';
   return {
     modelPath,
     exists,
@@ -573,11 +574,31 @@ async function handleRunFfmpeg(event, { args, outputFile }) {
     runCancelled = false;
     let stderr = '';
     let totalSec = 0;
+    // Decode noise repeats line-for-line - collapse runs so logs stay readable.
+    let lastEmitted = null;
+    let dupeCount = 0;
+    const emitDeduped = (rawLine) => {
+      const t = String(rawLine || '').trim();
+      if (!t) return;
+      if (t === lastEmitted) { dupeCount += 1; return; }
+      if (dupeCount > 0) {
+        emit('ffmpeg-log', { line: `... (x${dupeCount + 1} identical lines)` });
+        dupeCount = 0;
+      }
+      lastEmitted = t;
+      emit('ffmpeg-log', { line: t });
+    };
+    const flushDeduped = () => {
+      if (dupeCount > 0) {
+        emit('ffmpeg-log', { line: `... (x${dupeCount + 1} identical lines)` });
+        dupeCount = 0;
+      }
+    };
     proc.stderr.on('data', (d) => {
       const line = d.toString();
       stderr += line;
       for (const l of line.split('\n')) {
-        if (l.trim()) emit('ffmpeg-log', { line: l.trim() });
+        if (l.trim()) emitDeduped(l.trim());
         // Total duration appears once in the header: "Duration: 00:00:27.49, ..."
         const dur = l.match(/Duration:\s*(\d+):(\d+):([\d.]+)/);
         if (dur && !totalSec) totalSec = parseHMS(dur[1], dur[2], dur[3]);
@@ -592,14 +613,16 @@ async function handleRunFfmpeg(event, { args, outputFile }) {
         }
       }
     });
-    proc.stdout.on('data', (d) => emit('ffmpeg-log', { line: d.toString().trim() }));
+    proc.stdout.on('data', (d) => emitDeduped(d.toString().trim()));
     proc.on('error', (e) => {
       runningProc = null;
+      flushDeduped();
       emit('ffmpeg-log', { line: `ERROR: ${e.message}` });
       reject(e);
     });
     proc.on('close', (code) => {
       runningProc = null;
+      flushDeduped();
       emit('ffmpeg-log', { line: `ffmpeg exited with code ${code}` });
       if (runCancelled) {
         emit('ffmpeg-progress', { done: true, cancelled: true });
@@ -681,6 +704,7 @@ module.exports = {
   fixupSizeLimit,
   fixupConflicts,
   ensureOutputFile,
+  fixupOutputDir,
   parseSizeLimit,
   parseTrimIntent,
   trimNeedsDuration,

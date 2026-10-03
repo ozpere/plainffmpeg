@@ -95,6 +95,37 @@ function ensureOutputFile(args, instruction) {
   return { args: out, corrections };
 }
 
+// The model learns directories from prompt examples, so it may emit the
+// example dir (/tmp) instead of the input folder. A wrong directory only
+// shows in the translated box (the runner swaps in the real destination),
+// but the shown command must still name the input folder. Bare filenames
+// stay bare - they are placeholders the runner replaces.
+function fixupOutputDir(args, inputFile) {
+  const corrections = [];
+  if (!inputFile || !Array.isArray(args) || args.length === 0) return { args, corrections };
+  const out = [...args];
+  const last = out[out.length - 1];
+  if (!last || String(last).startsWith('-')) return { args: out, corrections };
+  const dirOf = (p) => {
+    const s = String(p);
+    const i = Math.max(s.lastIndexOf('/'), s.lastIndexOf('\\'));
+    return i >= 0 ? s.slice(0, i) : '';
+  };
+  const inDir = dirOf(inputFile);
+  if (!inDir) return { args: out, corrections };
+  const outStr = String(last);
+  const outDir = dirOf(outStr);
+  if (!outDir) return { args: out, corrections };
+  if (outDir === inDir) return { args: out, corrections };
+  const base = outStr.slice(Math.max(outStr.lastIndexOf('/'), outStr.lastIndexOf('\\')) + 1);
+  if (!base) return { args: out, corrections };
+  const sep = inDir.includes('\\') ? '\\' : '/';
+  const clean = (inDir.endsWith('/') || inDir.endsWith('\\')) ? inDir.slice(0, -1) : inDir;
+  out[out.length - 1] = clean + sep + base;
+  corrections.push(`Rewrote output directory to the input folder (${outStr} → ${out[out.length - 1]})`);
+  return { args: out, corrections };
+}
+
 function tokenizeArgs(argString, inputFile) {
   // Minimal shell-aware splitter (handles single/double quotes).
   const tokens = [];
@@ -229,14 +260,19 @@ function parseHMS(h, m, s) {
   return parseInt(h, 10) * 3600 + parseInt(m, 10) * 60 + parseFloat(s);
 }
 
-// Environment diagnosis for machine-level failures (correct command,
-// machine cannot do the work). Returns a hint or null.
+// Failure diagnosis for environment and input problems (correct command,
+// machine or file cannot do the work). Returns a hint or null.
 function ffmpegFailureHint(stderr) {
   const text = String(stderr || '');
   if (/cannot allocate memory|malloc.*failed|out of memory/i.test(text)) {
     return 'Likely cause: FFmpeg ran out of memory. Rendering at high resolution and frame rate (e.g. upscaling 720p to 4K at 60fps) needs a lot of RAM and Windows Sandbox has very little. ' +
       'Note: upscaling cannot add detail beyond the source - it only makes a bigger file. ' +
       'Try a smaller target like 1080p, close other apps, or run on a machine with more memory.';
+  }
+  if (/error submitting packet to decoder|failed to decode frame|corrupt frame|no sequence header|invalid data found/i.test(text)) {
+    return 'Likely cause: the input has corrupt frames, or a cut on stream-copy landed between keyframes. ' +
+      'Re-encode instead of stream-copy (drop -c:v copy / -c copy), keep -ss/-t after -i for accurate seeking. ' +
+      'If the errors persist on a plain convert, the file itself is damaged - try another file.';
   }
   return null;
 }
@@ -682,7 +718,8 @@ function fixupNoopSeek(args, instruction, durationSec) {
 
 // Contradictions ffmpeg rejects outright (or that violate runner contracts):
 // two-pass flags (single-shot runner), audio-codec flags combined with -an,
-// and `-c:v copy` paired with video filters (filtering requires re-encoding).
+// `-c:v copy` paired with video filters (filtering requires re-encoding),
+// and `-c:v copy` paired with a trim (cuts land between keyframes).
 // Runs before size-limit insertions (flag/value pairs must stay adjacent).
 // The container comes from the instruction words, mirroring ensureOutputFile.
 // Returns { args, corrections } - never throws.
@@ -735,6 +772,26 @@ function fixupConflicts(args, instruction) {
     } else {
       out[cvIdx + 1] = 'libx264';
       corrections.push('Replaced `-c:v copy` with `-c:v libx264` (filters cannot stream-copy)');
+    }
+  }
+  // Accurate cuts cannot stream-copy: a trim between keyframes corrupts the
+  // cut, so a trim intent re-encodes. Explicit remux keeps copy as asked.
+  const trimKind = parseTrimIntent(instruction).kind;
+  const cvTrimIdx = out.findIndex((t) => t === '-c:v');
+  if (trimKind !== 'none' && cvTrimIdx !== -1 && String(out[cvTrimIdx + 1]).toLowerCase() === 'copy') {
+    const text = String(instruction || '').toLowerCase();
+    const remux = /\bremux\b|without\s+re[\s-]?encod|no\s+re[\s-]?encod|\bstream\s*copy\b|just\s+(change|convert)\s+the\s+container|keep\s+the\s+(video\s+)?codecs?\b/i.test(text);
+    if (!remux) {
+      if (/\bwebm\b/.test(text)) {
+        out[cvTrimIdx + 1] = 'libvpx-vp9';
+        corrections.push('Replaced `-c:v copy` with `-c:v libvpx-vp9` (trimming cannot stream-copy accurately)');
+      } else if (/\bgif\b/.test(text)) {
+        out.splice(cvTrimIdx, 2);
+        corrections.push('Removed `-c:v copy` (gif output uses its default encoder with a trim)');
+      } else {
+        out[cvTrimIdx + 1] = 'libx264';
+        corrections.push('Replaced `-c:v copy` with `-c:v libx264` (trimming cannot stream-copy accurately)');
+      }
     }
   }
   return { args: out, corrections };
@@ -1124,6 +1181,7 @@ function runTranslationPipeline(tokens, context) {
     (a) => fixupInput(a, inputFile),
     (a) => fixupConflicts(a, instruction),
     (a) => ensureOutputFile(a, instruction),
+    (a) => fixupOutputDir(a, inputFile),
     (a) => fixupLastTrim(a, instruction, duration),
     (a) => fixupMiddleTrim(a, instruction, duration),
     (a) => fixupFirstTrim(a, instruction, duration),
@@ -1146,6 +1204,7 @@ module.exports = {
   sanitizeModelOutput,
   looksLikeFileToken,
   ensureOutputFile,
+  fixupOutputDir,
   tokenizeArgs,
   P_HEIGHTS,
   fixupArgs,
