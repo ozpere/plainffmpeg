@@ -819,6 +819,8 @@ async function main() {
   assert.ok(renderer.includes('refreshRunEnabled'), 'run availability must follow effective args');
   assert.ok(html.includes('<textarea id="cmdOut"'), 'command box must be an editable textarea');
   assert.ok(html.includes('Translated FFmpeg command (editable)'), 'command label must say editable');
+  assert.ok(html.includes('class="help-tip"'), 'command label must offer help');
+  assert.ok(html.includes('{input} is the loaded video'), 'help must explain the template tokens');
   assert.ok(!html.includes('id="cmdEdit"'), 'separate override field must be gone');
   assert.ok(!renderer.includes('cmdEdit'), 'renderer must not reference the old field');
   assert.ok(renderer.includes('tokenizeCustomCommand'), 'box edits must tokenize quoted paths');
@@ -1349,6 +1351,7 @@ async function main() {
   assert.ok(css.includes('#barModel'), 'model progress bar must be styled');
   assert.ok(css.includes('.note.warn'), 'fallback notice must be styled');
   assert.ok(css.includes('max-height: 320px'), 'video preview must be size-capped');
+  assert.ok(css.includes('.help-tip::after'), 'help tooltip must be styled');
   assert.ok(css.includes('.dz-inner video') && css.includes('border: 1px solid #4a4032'), 'loaded video must show a thin frame');
   assert.ok(css.includes('position: sticky'), 'title bar must stay frozen while scrolling');
   assert.ok(/\.badge\.loading\s*{[^}]*#f2b8b0/i.test(css), 'loading badge must be pastel red');

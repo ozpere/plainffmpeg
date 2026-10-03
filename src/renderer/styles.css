@@ -166,6 +166,26 @@ button.primary:hover:not(:disabled) { background: #f0a83a; border-color: #f0a83a
 }
 .cmd-edit:focus { outline: none; border-color: var(--accent); }
 .cmd-edit:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* inline help badge: CSS-only tooltip on hover/focus, text from aria-label */
+.help-tip {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 18px; height: 18px; margin-left: 6px; border-radius: 50%;
+  border: 1px solid var(--border); color: var(--muted);
+  font-size: 12px; font-weight: 700; cursor: help;
+  position: relative; vertical-align: middle;
+}
+.help-tip:hover, .help-tip:focus-visible { border-color: var(--accent); color: var(--text); }
+.help-tip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.help-tip::after {
+  content: attr(aria-label);
+  position: absolute; top: calc(100% + 8px); left: 50%; transform: translateX(-50%);
+  width: max-content; max-width: 320px; padding: 9px 11px; border-radius: 6px;
+  background: #100e0b; border: 1px solid #4a4032; color: var(--text);
+  font-size: 12.5px; font-weight: 400; line-height: 1.45; text-align: left;
+  white-space: normal; z-index: 50; pointer-events: none;
+  opacity: 0; visibility: hidden; transition: opacity .15s;
+}
+.help-tip:hover::after, .help-tip:focus::after { opacity: 1; visibility: visible; }
 .note { font-size: 12.5px; color: var(--muted); margin: 0; }
 .note.error { color: var(--danger); }
 .note.warn { color: var(--accent); }
