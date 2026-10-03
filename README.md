@@ -1,30 +1,66 @@
 # <img src="assets/logo.png" alt="logo" width="32" height="32"> PlainFFmpeg
 
-Self-contained video editor using plain English - describe the edit, the app translates it into an FFmpeg command with a local LLM and runs it. 100% offline: no Ollama, no Python, no cloud, no accounts.
+Edit videos by describing what you want in plain English. Type *"convert to mp4, trim the last 5 seconds, and make it 720p"* and the app does it. Everything runs on your own computer, so your videos never leave your PC.
 
-## How it works
+How it works: a small built-in LLM turns your sentence into instructions for FFmpeg - the free, open-source video engine behind much of the world's most popular video editing software - and the app runs them for you.
 
-1. Load a video (drag & drop, or *Browse…*).
-2. Type an instruction, e.g. *"Convert to mp4, trim the last 5 seconds, make it 360p"*.
-3. The bundled GGUF model (`Qwen3-1.7B` via `node-llama-cpp`)
-   translates it to FFmpeg arguments, which run through a bundled
-   `ffmpeg-static` binary with live logs.
-4. If the translation looks wrong, edit it right in *Translated FFmpeg command (editable)* - edits run as-is (only `-y` plus the container extension are enforced) and need `-i`.
+## Download
 
-LLM problems never run a guessed command - they surface as a clear error
-instead. No silent fallbacks, anywhere.
+**[Get the latest release](https://github.com/ozpere/plainffmpeg/releases)**
 
-## Prerequisites
+### Windows
 
-- **Node.js 24 LTS** - https://nodejs.org (matches the Electron 44 runtime)
+- **Setup - recommended!** (`PlainFFmpeg-Setup.exe`) - installs the app and everything it needs.
+- **Portable** (`PlainFFmpeg-Portable.exe`) - no install, runs from any folder or USB stick. It cannot install the Microsoft Visual C++ Redistributable (x64) that it needs, so on PCs that lack it, you need to install that first (the app informs you and gives you the link).
+
+SmartScreen may show a blue *"Windows protected your PC"* warning since the app is not code-signed yet - click **More info**, then **Run anyway**.
+
+### Linux
+
+Just one file: the `.AppImage`. Make it executable and run it.
+
+### macOS
+
+No Mac build yet - but you can build it yourself from source, see below.
+
+## Your first video in 3 steps
+
+1. **Load a video** - drag a file onto the window, or press *Browse*.
+2. **Type what you want** and press **Translate & Run FFmpeg**.
+3. **Find the edited video** next to the original, with `-out` added to its name. If that file already exists, the app asks before overwriting it.
+
+One instruction can do several things at once - paste any of these to see:
+
+- *"Convert to mp4, trim the last 5 seconds, and make it 720p"*
+- *"Keep only the middle 10 seconds and remove the sound"*
+- *"Make a gif of the first 3 seconds"*
+- *"Convert to mkv and boost the volume to 150%"*
+
+### One thing to know first
+
+The translations require downloading the local LLM (about 1.3 GB, once) - press **Download local LLM** and stay online until it finishes. Everything works offline after that.
+
+## If something goes wrong
+
+- **"Translation failed"** - press **Show logs** at the bottom and read the last lines. The most common cause is simply that the assistant above has not been downloaded yet.
+- **The app mentions a missing Microsoft Visual C++ Redistributable (x64)** (portable version) - install it from the link shown, restart the app, and try again.
+- **Your finished video has no sound** - check your instruction: words like *"mute"* (and gif, which has no sound at all) remove the audio on purpose.
+- **The result is not what you asked for** - be exact with seconds and name one container (*"trim the last 5 seconds"*, not *"tidy it up"*). Vague wishes do not map to anything concrete.
+- **Your file will not load** - try a common format such as mp4, mkv, webm, mov, or avi.
+
+## Technical details
+
+### Install & run from source
+
+You need:
+
+- **Node.js 24 LTS** - https://nodejs.org
 - **Git** - https://git-scm.com (Windows: then run
   `git config --global core.longpaths true` once)
 - **Windows only:** Microsoft Visual C++ Redistributable (x64) -
   https://aka.ms/vs/17/release/vc_redist.x64.exe (required by the
   prebuilt LLM binary)
 - ~3 GB free (dependencies + the ~1.3 GB model)
-
-## Install & run
 
 ```bash
 # Linux / macOS
@@ -38,36 +74,19 @@ npm run install:win
 npm start
 ```
 
-`install:win` forces CPU-only LLM binaries (skipping the Vulkan dead end),
+`install:win` forces CPU-only LLM binaries,
 runs the preflight checks, and verifies the native binary loads. It skips
 the ~1.3 GB model fetch by default (fast, offline-friendly installs) -
 first launch downloads it in-app, or run `npm run download-model` anytime
 (`SKIP_MODEL_DOWNLOAD=0` fetches during install). Plain `npm install`
 still fetches via `postinstall`, skipped when offline.
 
-## Windows installer
+To build distributables: `npm run dist:win` produces the thin installer + portable
+exe into `dist/` (fetches the MSVC redist itself, installs it silently),
+`npm run dist:linux` the AppImage. Unsigned Windows builds trigger
+SmartScreen until code-signed.
 
-```cmd
-npm run fetch-vc-redist
-npm run dist:win
-```
-
-Builds a per-user NSIS installer and a portable exe in `dist/`. The
-installer is thin (no ~1.3 GB model bundled) and sets up the MSVC runtime
-silently - declining its admin prompt still installs the app, but
-translation needs that runtime. The installer is branded with the app icon
-and the warm-charcoal sidebar/header art (full NSIS color theming is not
-possible, so pages keep the native layout). The portable keeps everything
-(model, profile, imports) in `PlainFFmpegData` next to the exe, so deleting
-the folder leaves nothing behind. If the exe folder is not writable, the
-portable asks before using Windows app data instead; if it simply finds an
-existing model in app data (from an install or an earlier run), it reuses it
-and says so without claiming the folder is unwritable. First launch
-downloads the model in-app (resumable, with progress), then works fully
-offline. Releases are built by CI on demand or `v*` tags; unsigned builds
-trigger SmartScreen until code-signed.
-
-## Scripts
+### Scripts
 
 | Command                | What it does                                              |
 | ---------------------- | --------------------------------------------------------- |
@@ -104,39 +123,7 @@ assets/                Logo, platform icons, branded installer art, NSIS hooks
 models/                GGUF weights live here (gitignored, never committed)
 ```
 
-## Notes
-
-- The engine badge polls the LLM state: unavailable → loading → ready
-  (or failed, with the cause in the logs). A translation requested
-  mid-load simply waits for it.
-- Translation and FFmpeg step statuses are color- and icon-coded (Idle,
-  Translating…/Running… (live N% during runs), Done, Failed, Cancelled), so outcomes read at
-  a glance.
-- "Trim the last N seconds" means *cutting* those seconds off
-  (`-t duration-N`); "keep the last N" keeps the tail; "keep the middle N"
-  keeps the center cut (`-ss (duration-N)/2 -t N`); "keep the first N" keeps
-  the head (`-t N`), "remove the first N" cuts the head off (`-ss N`), and
-  "keep seconds A to B" keeps that window (`-ss A -t B-A`).
-- Speed ("2x faster", "slow motion") keeps audio in sync (`setpts` +
-  matched `atempo`); "cap at 30fps" limits the frame rate; "N wide" scales
-  to that width keeping aspect; "rotate 90" / "flip horizontal" apply the
-  matching video filter.
-- Volume ("boost", "half", "150%") tunes `-af volume`; "as gif" enforces
-  small-file GIF defaults with no audio; "thumbnail at Ns" renders one
-  still (`.png`, `.jpg` on request); "without re-encoding" remuxes with
-  stream copy.
-- Size limits ("below 2GB") are enforced with single-pass capped
-  bitrate computed from the probed duration (stretched by slow motion,
-  shrunk by high speed) - two-pass is never used.
-- Output extensions always follow the effective command (box edits win over the stored translation), defaulting to
-  `<name>-out.<ext>` next to the input, and the app asks before overwriting an existing file.
-- The translator speaks only in `{input}`/`{output}` placeholders, so the model never fumbles real paths;
-  the app substitutes the loaded video and the chosen destination when running.
-- Long runs show live progress and can be stopped - Run FFmpeg becomes
-  Stop FFmpeg while running. Stopping keeps any partial output and marks
-  the run Cancelled, never Failed.
-- Open folder jumps to the output directory (disabled until a destination
-  exists).
+How a plain-English instruction becomes exact FFmpeg flags (pipeline order, placeholders, run-time substitution) is documented in `AGENTS.md`, enforced by `scripts/smoke-test.js`, with regression cases in `scripts/translate-cases.js`.
 
 ## License
 
