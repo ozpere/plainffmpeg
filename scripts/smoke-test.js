@@ -836,7 +836,7 @@ async function main() {
   assert.ok(html.includes('<textarea id="cmdOut"'), 'command box must be an editable textarea');
   assert.ok(html.includes('Translated FFmpeg command (editable)'), 'command label must say editable');
   assert.ok(html.includes('class="help-tip"'), 'command label must offer help');
-  assert.ok(html.includes('{input} is the loaded video'), 'help must explain the template tokens');
+  assert.ok(html.includes('Use {input} for the loaded video'), 'help must explain the template tokens');
   assert.ok(!html.includes('id="cmdEdit"'), 'separate override field must be gone');
   assert.ok(!renderer.includes('cmdEdit'), 'renderer must not reference the old field');
   assert.ok(renderer.includes('tokenizeCustomCommand'), 'box edits must tokenize quoted paths');
