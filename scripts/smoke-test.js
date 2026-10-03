@@ -1345,6 +1345,7 @@ async function main() {
   assert.ok(css.includes('#barModel'), 'model progress bar must be styled');
   assert.ok(css.includes('.note.warn'), 'fallback notice must be styled');
   assert.ok(css.includes('max-height: 320px'), 'video preview must be size-capped');
+  assert.ok(css.includes('.dz-inner video') && css.includes('border: 1px solid #4a4032'), 'loaded video must show a thin frame');
   assert.ok(css.includes('position: sticky'), 'title bar must stay frozen while scrolling');
   assert.ok(/\.badge\.loading\s*{[^}]*#f2b8b0/i.test(css), 'loading badge must be pastel red');
   assert.ok(/\.badge\.ready\s*{[^}]*#bfe3b8/i.test(css), 'ready badge must be pastel green');
