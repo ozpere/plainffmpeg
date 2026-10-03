@@ -62,6 +62,7 @@ const SYSTEM_PROMPT = [
   'CONTAINERS AND CODECS:',
   '- mp4/mov: `-c:v libx264 -c:a aac`, plus `-movflags +faststart` for mp4/mov.',
   '- h265/HEVC: `-c:v libx265` (mp4/mov keep `-c:a aac -movflags +faststart`).',
+  '- Encoder names are always lib* form (h264 → libx264, h265 → libx265). Never emit a bare word like `-c:v h265` - ffmpeg has no such encoder.',
   '- mkv: `-c:v libx264 -c:a aac` (or `-c:a copy` if the audio is untouched).',
   '- webm: `-c:v libvpx-vp9 -c:a libopus`. NEVER libvpx+libvorbis.',
   '- gif: `-vf "fps=10,scale=480:-1:flags=lanczos"` and NO audio stream.',

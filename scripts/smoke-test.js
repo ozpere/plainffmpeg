@@ -121,6 +121,7 @@ async function main() {
   );
   // correction layer: bare "360p"-style sizes must never reach ffmpeg
   assert.strictEqual(typeof mainMod.fixupArgs, 'function');
+  assert.strictEqual(fixupsMod.fixupCodecs, mainMod.fixupCodecs, 'fixups must be the same functions main re-exports');
   let r = mainMod.fixupArgs(['-y', '-i', 'in.mp4', '-s', '360p', 'out.mkv']);
   assert.deepStrictEqual(r.args, ['-y', '-i', 'in.mp4', '-vf', 'scale=-2:360', 'out.mkv']);
   assert.ok(r.corrections.length === 1, 'must report the rewrite');
@@ -141,6 +142,21 @@ async function main() {
   r = mainMod.fixupArgs(['-i', 'in.mp4', '-filter:v', 'hue=s=0', '-vf', 'scale=-2:720', 'out.mkv']);
   assert.deepStrictEqual(r.args, ['-i', 'in.mp4', '-vf', 'hue=s=0,scale=-2:720', 'out.mkv']);
   console.log('[smoke] fixupArgs OK');
+
+  // codec aliases: bare words the model echoes (h265) become real encoders
+  let cd = mainMod.fixupCodecs(['-i', '{input}', '-c:v', 'h265', '{output}']);
+  assert.deepStrictEqual(cd.args, ['-i', '{input}', '-c:v', 'libx265', '{output}']);
+  assert.strictEqual(cd.corrections.length, 1, 'must report the rewrite');
+  cd = mainMod.fixupCodecs(['-i', '{input}', '-c:v', 'H264', '-c:a', 'MP3', '{output}']);
+  assert.deepStrictEqual(cd.args, ['-i', '{input}', '-c:v', 'libx264', '-c:a', 'libmp3lame', '{output}']);
+  assert.strictEqual(cd.corrections.length, 2, 'matching is case-insensitive');
+  cd = mainMod.fixupCodecs(['-i', '{input}', '-c:v', 'copy', '-c:v', 'libx264', '{output}']);
+  assert.deepStrictEqual(cd.args, ['-i', '{input}', '-c:v', 'copy', '-c:v', 'libx264', '{output}']);
+  assert.strictEqual(cd.corrections.length, 0, 'copy and real encoders untouched');
+  cd = mainMod.fixupCodecs(['-i', '{input}', '-c:v', 'Copy', '{output}']);
+  assert.deepStrictEqual(cd.args, ['-i', '{input}', '-c:v', 'copy', '{output}']);
+  assert.strictEqual(cd.corrections.length, 1, 'capitalized copy normalizes too');
+  console.log('[smoke] fixupCodecs OK');
 
   // seek hygiene: repeated seeks collapse (ffmpeg honors one), provable
   // no-ops drop - but never a trim window, a slowed duration, or the still.

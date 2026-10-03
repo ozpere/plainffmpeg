@@ -316,6 +316,13 @@ const TRANSLATE_CASES = [
     modelRaw: '-i {input} -c:v copy -c:a aac {output}',
     expectedArgs: ['-i', '{input}', '-c:v', 'libx264', '-c:a', 'aac', '-ss', '22.49', '{output}'],
   },
+  {
+    name: 'bare codec words become real encoders',
+    instruction: 'make it 720p and greyscale and muted and h265',
+    duration: 30,
+    modelRaw: '-i {input} -vf scale=-2:720,hue=s=0 -an -c:v h265 {output}',
+    expectedArgs: ['-i', '{input}', '-vf', 'scale=-2:720,hue=s=0', '-an', '-c:v', 'libx265', '{output}'],
+  },
 ];
 
 module.exports = { TRANSLATE_CASES };

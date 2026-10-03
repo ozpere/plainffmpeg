@@ -226,6 +226,34 @@ function fixupArgs(args) {
   return { args: out, corrections };
 }
 
+// Bare codec words are not encoder names: ffmpeg knows libx265, not h265.
+// The model often echoes the user's words into -c:v/-c:a, so normalize
+// them (case-insensitive) to real encoder names. `copy` and correct values
+// pass through untouched. Returns { args, corrections } - never throws.
+const CODEC_ALIASES = {
+  h264: 'libx264', x264: 'libx264', avc: 'libx264',
+  h265: 'libx265', x265: 'libx265', hevc: 'libx265',
+  vp9: 'libvpx-vp9', vp8: 'libvpx',
+  mp3: 'libmp3lame', aac: 'aac', opus: 'libopus', vorbis: 'libvorbis',
+  copy: 'copy',
+};
+
+function fixupCodecs(args) {
+  const corrections = [];
+  if (!Array.isArray(args)) return { args, corrections };
+  const out = [...args];
+  for (let i = 0; i < out.length - 1; i++) {
+    if ((out[i] === '-c:v' || out[i] === '-c:a') && typeof out[i + 1] === 'string') {
+      const want = CODEC_ALIASES[String(out[i + 1]).toLowerCase()];
+      if (want && out[i + 1] !== want) {
+        corrections.push(`Replaced "${out[i]} ${out[i + 1]}" with "${out[i]} ${want}" (ffmpeg has no "${out[i + 1]}" encoder)`);
+        out[i + 1] = want;
+      }
+    }
+  }
+  return { args: out, corrections };
+}
+
 function quoteArgs(args) {
   return args.map((a) => (/\s/.test(a) ? `"${a}"` : a)).join(' ');
 }
@@ -1161,6 +1189,7 @@ function runTranslationPipeline(tokens, context) {
   const { instruction, duration } = context || {};
   const steps = [
     (a) => fixupArgs(a),
+    (a) => fixupCodecs(a),
     (a) => fixupDedupeSeek(a),
     (a) => fixupSpeed(a, instruction),
     (a) => fixupFps(a, instruction),
@@ -1198,6 +1227,7 @@ module.exports = {
   tokenizeArgs,
   P_HEIGHTS,
   fixupArgs,
+  fixupCodecs,
   quoteArgs,
   fixupInput,
   parseHMS,
