@@ -19,9 +19,9 @@ SmartScreen may show a blue *"Windows protected your PC"* warning since the app 
 
 Just one file: the `.AppImage`. Make it executable and run it.
 
-### macOS
+### macOS (Apple Silicon only)
 
-No Mac build yet - but you can build it yourself from source, see below.
+Grab the `.dmg` file, open it, and drag PlainFFmpeg to Applications. Since the app is not signed by Apple, macOS may block the first launch - right-click (or Control-click) the app, choose Open, then Open again.
 
 ## Your first video in 3 steps
 
@@ -97,6 +97,7 @@ SmartScreen until code-signed.
 | `npm run fetch-vc-redist` | Fetch the MSVC redist into `assets/` (build-time only) |
 | `npm run dist:win` | Build the Windows installer + portable exe into `dist/` |
 | `npm run dist:linux` | Build the Linux AppImage into `dist/` |
+| `npm run dist:mac` | Build the macOS dmg (Apple Silicon) into `dist/` |
 | `npm run install:win`  | Windows-safe install with preflight checks                |
 
 ## Project layout

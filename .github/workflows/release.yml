@@ -76,9 +76,38 @@ jobs:
           path: dist/*.AppImage
           retention-days: ${{ github.ref_type == 'tag' && 1 || 14 }}
 
+  build-mac:
+    runs-on: macos-14
+    permissions:
+      contents: read
+    env:
+      # Apple Silicon only; Metal is the default GPU backend (no override).
+      # Model stays thin-installed (fetched in-app on first launch).
+      SKIP_MODEL_DOWNLOAD: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Install
+        run: npm install
+      - name: Syntax checks
+        run: npm test
+      - name: Headless suite
+        run: npm run test:headless
+      - name: Build dmg
+        run: npm run dist:mac
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: PlainFFmpeg-mac
+          path: dist/*.dmg
+          retention-days: ${{ github.ref_type == 'tag' && 1 || 14 }}
+
   # Automatic Release, tag runs only (manual runs never publish).
   publish-release:
-    needs: [build-win, build-linux]
+    needs: [build-win, build-linux, build-mac]
     if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
     permissions:

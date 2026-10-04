@@ -987,12 +987,19 @@ async function main() {
   const linuxTargets = (pkg.build.linux && pkg.build.linux.target) || [];
   assert.ok(linuxTargets.some((t) => t.target === 'AppImage'), 'linux build must produce an AppImage');
   assert.ok(pkg.scripts['dist:linux'], 'linux dist script must exist');
+  // mac: Apple Silicon dmg only (no Intel, no App Store target)
+  const macTargets = (pkg.build.mac && pkg.build.mac.target) || [];
+  assert.ok(macTargets.some((t) => t.target === 'dmg' && (t.arch || []).includes('arm64')), 'mac build must produce an arm64 dmg');
+  assert.ok(pkg.scripts['dist:mac'], 'mac dist script must exist');
   // release workflow: bounded artifacts (500 MB account quota) + automatic
   // Releases on tags only, never on manual runs
   const workflow = fs.readFileSync(path.join(__dirname, '../.github/workflows/release.yml'), 'utf8');
   assert.ok(workflow.includes('retention-days'), 'artifacts must expire instead of piling up');
   assert.ok(workflow.includes('PlainFFmpeg-Windows-Setup'), 'windows installer artifact must name Windows');
   assert.ok(workflow.includes('PlainFFmpeg-Windows-Portable'), 'windows portable artifact must name Windows');
+  assert.ok(workflow.includes('PlainFFmpeg-mac'), 'mac dmg artifact must exist');
+  assert.ok(workflow.includes('macos-14'), 'mac build must run on Apple Silicon');
+  assert.ok(workflow.includes('dist/*.dmg'), 'mac job must upload the dmg');
   assert.ok(!workflow.includes('name: PlainFFmpeg-Setup\n'), 'unnamed-OS setup artifact must be gone');
   assert.ok(!workflow.includes('name: PlainFFmpeg-Portable\n'), 'unnamed-OS portable artifact must be gone');
   assert.ok(workflow.includes('softprops/action-gh-release'), 'tags must publish a Release');
