@@ -712,6 +712,7 @@ async function main() {
   assert.ok(renderer.includes('portable build does not install it'), 'portable must explain the missing system step');
   assert.ok(renderer.includes('Local LLM failed to load'), 'failed loads must name the failure, not promise a retry');
   assert.ok(!renderer.includes('Last LLM load failed - will retry on first translation'), 'misleading retry line must be gone');
+  assert.ok(!renderer.includes("startsWith('Last LLM load failed')"), 'dead failure-text check must be gone');
   assert.ok(renderer.includes('showBanner'), 'errors must surface through the themed banner');
   // empty instruction must be visible, not a hidden log line.
   assert.ok(renderer.includes("showBanner('Type an instruction first,"), 'empty instruction must banner');
@@ -787,6 +788,9 @@ async function main() {
   assert.ok(mainSrc.includes("replace('app.asar', 'app.asar.unpacked')"), 'ffmpeg path must be unpacked for spawn');
   // main must force overwrite (-y) - tested via source since spawn needs ffmpeg
   assert.ok(mainSrc.includes("finalArgs.unshift('-y')"), 'run must force -y overwrite');
+  // extension enforcement happens before substitution (outputExt coercion),
+  // never against the already-resolved trailing token
+  assert.ok(!mainSrc.includes('enforceOutputExtension(finalArgs'), 'resolved-token enforcement must be gone');
   // no File/Edit/View menu bar
   assert.ok(mainSrc.includes('setApplicationMenu(null)'), 'default menu bar must be removed');
   console.log('[smoke] output + menu OK');
@@ -863,11 +867,13 @@ async function main() {
   }
   console.log('[smoke] background preload OK');
 
-  // badge copy: capitalized Engine, proper-case states
+  // badge copy: capitalized Engine prefix on every state, each naming the local LLM
   assert.ok(renderer.includes('Engine: ${s.engine}'), 'badge must read "Engine: …"');
-  assert.ok(renderer.includes('Loading local LLM engine'), 'badge loading copy');
-  assert.ok(renderer.includes('Local LLM not loaded yet'), 'badge idle copy must name the local LLM');
+  assert.ok(renderer.includes("'Engine: Loading local LLM engine…'"), 'badge loading copy must carry the prefix');
+  assert.ok(renderer.includes("'Engine: Local LLM not loaded yet"), 'badge idle copy must carry the prefix');
   assert.ok(renderer.includes('Local LLM unavailable'), 'badge missing copy must name the local LLM');
+  assert.ok(!renderer.includes("setBadge('loading', 'Loading"), 'loading badge must carry the Engine prefix');
+  assert.ok(!renderer.includes("setBadge('warn', 'Local LLM not loaded"), 'idle badge must carry the Engine prefix');
   assert.ok(!renderer.includes('engine: ${s.engine}'), 'lowercase badge prefix must be gone');
   assert.ok(mainSrc.includes("'Loading local LLM engine…'"), 'main status copy');
   assert.ok(mainSrc.includes("'Local LLM unavailable'"), 'main missing copy must name the local LLM');
@@ -994,13 +1000,15 @@ async function main() {
   assert.ok(workflow.includes('retention-days'), 'artifacts must expire instead of piling up');
   assert.ok(workflow.includes('PlainFFmpeg-Windows-Setup'), 'windows installer artifact must name Windows');
   assert.ok(workflow.includes('PlainFFmpeg-Windows-Portable'), 'windows portable artifact must name Windows');
-  assert.ok(workflow.includes('PlainFFmpeg-mac'), 'mac dmg artifact must exist');
+  assert.ok(workflow.includes('PlainFFmpeg-Linux'), 'linux artifact must name the OS like the rest');
+  assert.ok(workflow.includes('PlainFFmpeg-Mac'), 'mac dmg artifact must exist');
   assert.ok(workflow.includes('macos-14'), 'mac build must run on Apple Silicon');
   assert.ok(workflow.includes('dist/*.dmg'), 'mac job must upload the dmg');
   assert.ok(!workflow.includes('name: PlainFFmpeg-Setup\n'), 'unnamed-OS setup artifact must be gone');
   assert.ok(!workflow.includes('name: PlainFFmpeg-Portable\n'), 'unnamed-OS portable artifact must be gone');
   assert.ok(workflow.includes('softprops/action-gh-release'), 'tags must publish a Release');
   assert.ok(workflow.includes("github.ref_type == 'tag'"), 'publishing must be tag-only');
+  assert.ok(workflow.includes("require('./package.json').version"), 'tag builds must verify the version match');
   assert.ok(workflow.includes('cache: npm'), 'CI must cache npm to cut flake surface');
   assert.ok(workflow.includes('contents: read'), 'build jobs must run least-privilege');
   assert.strictEqual(typeof mainMod.handleDownloadModel, 'function');
@@ -1417,7 +1425,7 @@ async function main() {
     assert.ok(!content.includes(bannedDash), `${f} must not contain em-dashes`);
   }
   // loading badge copy (no trailing "you can already type")
-  assert.ok(renderer.includes("'Loading local LLM engine…'"), 'badge loading copy');
+  assert.ok(renderer.includes("'Engine: Loading local LLM engine…'"), 'badge loading copy');
   assert.ok(!renderer.includes('you can already type'), 'badge must not nag');
   // decode floods stay readable: repeated ffmpeg lines collapse to one marker
   assert.ok(mainSrc.includes('identical lines'), 'run must collapse consecutive duplicate ffmpeg lines');
@@ -1480,6 +1488,7 @@ async function main() {
   assert.ok(renderer.includes('STOP_LABEL'), 'Run must morph into Stop while running');
   assert.ok(renderer.includes('ffmpegRunning'), 'morph clicks must route by run state');
   assert.ok(renderer.includes('ffmpegRunning ? false'), 'Stop must stay clickable mid-run');
+  assert.ok(renderer.includes('p.cancelled'), 'cancel progress must mark Cancelled, never Failed');
   assert.ok(renderer.includes('inputFile !== translateFile'), 'late results for an old video must be discarded');
   assert.ok(renderer.includes('cancelFfmpeg'), 'morphed button must still reach cancel');
   console.log('[smoke] button order OK');
