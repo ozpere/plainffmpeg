@@ -4,6 +4,8 @@ Edit videos by describing what you want in plain English. Type *"convert to mp4,
 
 How it works: a small built-in LLM turns your sentence into instructions for FFmpeg - the free, open-source video engine behind much of the world's most popular video editing software - and the app runs them for you.
 
+![PlainFFmpeg demo: load a video, type an instruction, translate and run](assets/PlainFFmpeg.gif)
+
 ## Download
 
 **[Get the latest release](https://github.com/ozpere/plainffmpeg/releases)**
@@ -120,7 +122,7 @@ scripts/
   install-windows.js   Windows install helper (CPU-only, long paths, MSVC check)
   smoke-test.js        Headless verification suite
   translate-cases.js   Regression corpus (raw model output → final args)
-assets/                Logo, platform icons, branded installer art, NSIS hooks
+assets/                Logo, platform icons, branded installer art, NSIS hooks, README demo gif
 models/                GGUF weights live here (gitignored, never committed)
 ```
 
