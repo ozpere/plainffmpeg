@@ -453,7 +453,7 @@
         // A fetch in flight creates its partial file fast - do not yank its
         // progress card away for a generic "not loaded yet".
         if (!modelDownloading) setModelDlVisible(false);
-        setBadge('loading', 'Loading local LLM engine…');
+        setBadge('loading', 'Engine: Loading local LLM engine…');
         repollMs = 2000;
       } else if (s.exists && s.loadError && !s.loading) {
         // Failed load: keep a way back visible. A corrupt model can be
@@ -470,7 +470,7 @@
         repollMs = 10000;
       } else if (s.exists) {
         setModelDlVisible(false);
-        setBadge('warn', 'Local LLM not loaded yet - it loads on first translation');
+        setBadge('warn', 'Engine: Local LLM not loaded yet - it loads on first translation');
         repollMs = 3000;
       } else {
         setBadge('warn', 'Engine: Local LLM unavailable - download the model below');

@@ -6,7 +6,27 @@ on:
     tags: ['v*']
 
 jobs:
+  # Artifact file names come from package.json `version`, not from the git
+  # tag - this gate keeps the two in agreement so a release tag can never
+  # ship files stamped with a different version.
+  check-version:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+      - name: Tag must match package.json version
+        if: github.ref_type == 'tag'
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          PKG=$(node -p "require('./package.json').version")
+          if [ "$TAG" != "$PKG" ]; then
+            echo "Tag v$TAG does not match package.json version $PKG"
+            exit 1
+          fi
+
   build-win:
+    needs: [check-version]
     runs-on: windows-latest
     permissions:
       contents: read
@@ -17,8 +37,8 @@ jobs:
       NODE_LLAMA_CPP_GPU: 'false'
       SKIP_MODEL_DOWNLOAD: '1'
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 24
           cache: npm
@@ -33,7 +53,7 @@ jobs:
       - name: Build installer + portable
         run: npm run dist:win
       - name: Upload installer
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: PlainFFmpeg-Windows-Setup
           path: dist/*Setup*.exe
@@ -42,13 +62,14 @@ jobs:
           # as a one-day safety buffer. Manual runs keep 14 days for testing.
           retention-days: ${{ github.ref_type == 'tag' && 1 || 14 }}
       - name: Upload portable
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: PlainFFmpeg-Windows-Portable
           path: dist/*Portable*.exe
           retention-days: ${{ github.ref_type == 'tag' && 1 || 14 }}
 
   build-linux:
+    needs: [check-version]
     runs-on: ubuntu-22.04
     permissions:
       contents: read
@@ -56,8 +77,8 @@ jobs:
       NODE_LLAMA_CPP_GPU: 'false'
       SKIP_MODEL_DOWNLOAD: '1'
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 24
           cache: npm
@@ -70,13 +91,14 @@ jobs:
       - name: Build AppImage
         run: npm run dist:linux
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
-          name: PlainFFmpeg-linux
+          name: PlainFFmpeg-Linux
           path: dist/*.AppImage
           retention-days: ${{ github.ref_type == 'tag' && 1 || 14 }}
 
   build-mac:
+    needs: [check-version]
     runs-on: macos-14
     permissions:
       contents: read
@@ -85,8 +107,8 @@ jobs:
       # Model stays thin-installed (fetched in-app on first launch).
       SKIP_MODEL_DOWNLOAD: '1'
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 24
           cache: npm
@@ -99,9 +121,9 @@ jobs:
       - name: Build dmg
         run: npm run dist:mac
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
-          name: PlainFFmpeg-mac
+          name: PlainFFmpeg-Mac
           path: dist/*.dmg
           retention-days: ${{ github.ref_type == 'tag' && 1 || 14 }}
 
@@ -113,11 +135,11 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           path: release-assets
           merge-multiple: true
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           files: release-assets/*
           generate_release_notes: true
