@@ -1,6 +1,6 @@
 {
   "name": "plainffmpeg",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "PlainFFmpeg - Self-contained video editor using plain English.",
   "main": "src/main.js",
   "author": "Oz Pere",
