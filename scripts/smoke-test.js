@@ -965,8 +965,9 @@ async function main() {
   assert.ok((pkg.build.asarUnpack || []).some((p) => p.includes('@node-llama-cpp')), 'native LLM bins must be unpacked from asar');
   assert.ok((pkg.build.asarUnpack || []).some((p) => p.includes('ffmpeg-static')), 'ffmpeg binary must be unpacked from asar');
   assert.ok(!(pkg.build.files || []).some((f) => f.includes('.gguf')), 'installer stays thin - no model weights bundled');
-  // CPU-only app: GPU prebuilt variants must not ship (hundreds of MB dead)
-  for (const pat of ['*-cuda*', '*-vulkan*']) {
+  // NVIDIA fast path ships (CUDA base); the 368 MB ext fallback package
+  // and the flaky Vulkan variant must never ship
+  for (const pat of ['*-cuda-ext*', '*-vulkan*']) {
     assert.ok((pkg.build.files || []).some((f) => f === `!**/node_modules/@node-llama-cpp/${pat}/**`),
       `packaging must exclude GPU variants (${pat})`);
   }
