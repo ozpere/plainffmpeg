@@ -5,7 +5,7 @@ Edit videos by describing what you want in plain English. Type *"convert to mp4,
 How it works: a small built-in LLM turns your sentence into instructions for FFmpeg - the free, open-source video engine behind much of the world's most popular video editing software - and the app runs them for you.
 
 <div align="center">
-  <img src="assets/PlainFFmpeg.gif" width="720" alt="PlainFFmpeg demo: load a video, type an instruction, translate and run">
+  <img src="assets/PlainFFmpeg-demo.gif" width="720" alt="PlainFFmpeg demo: load a video, type an instruction, translate and run">
 </div>
 
 ## Download

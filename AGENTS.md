@@ -42,7 +42,8 @@ scripts/download-model.js GGUF fetcher, resumable (TARGET is models/model.gguf, 
 scripts/fetch-vc-redist.js MSVC redist fetcher for the installer (not committed)
 assets/vc-redist.nsh     NSIS hooks: silent MSVC redist install (`customInstall`, needs vc_redist.x64.exe beside it at build) and uninstall cleanup (`customUnInstall` removes `%APPDATA%\PlainFFmpeg`)
 assets/installerSidebar.bmp + installerHeader.bmp  Branded NSIS art (164x314 sidebar, 150x57 header, warm-charcoal + logo + accent stripe); wired via build.nsis, regenerated with ffmpeg-static if the logo changes
-assets/PlainFFmpeg.gif    README demo (app usage screen recording, not bundled into installers)
+assets/PlainFFmpeg-demo.gif    README demo (app usage screen recording, not bundled into installers)
+assets/PlainFFmpeg-demo.mp4    Spare copy of the demo recording (currently unused, not bundled)
 .github/workflows/release.yml Windows CI (least-privilege, npm-cached): install, checks, dist:win, dist:linux, upload exes
 scripts/install-windows.js CPU-only install helper
 scripts/smoke-test.js    Headless contract, asserts behavior not just syntax

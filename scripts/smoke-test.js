@@ -20,7 +20,7 @@ const required = [
   'scripts/fetch-vc-redist.js',
   'scripts/translate-cases.js',
   'assets/logo.png',
-  'assets/PlainFFmpeg.gif',
+  'assets/PlainFFmpeg-demo.gif',
   'assets/icon.ico',
   'assets/icon.icns',
   'assets/installerSidebar.bmp',
@@ -1432,7 +1432,7 @@ async function main() {
   // README demo: width-capped gif (markdown images cannot be sized,
   // CSS is stripped from readmes)
   const readme = fs.readFileSync(path.join(__dirname, '..', 'README.md'), 'utf8');
-  assert.ok(readme.includes('<img src="assets/PlainFFmpeg.gif" width="720"'), 'README must embed the demo gif');
+  assert.ok(readme.includes('<img src="assets/PlainFFmpeg-demo.gif" width="720"'), 'README must embed the demo gif');
   // loading badge copy (no trailing "you can already type")
   assert.ok(renderer.includes("'Engine: Loading local LLM engine…'"), 'badge loading copy');
   assert.ok(!renderer.includes('you can already type'), 'badge must not nag');
