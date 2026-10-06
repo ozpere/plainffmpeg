@@ -999,6 +999,11 @@ async function main() {
   const macTargets = (pkg.build.mac && pkg.build.mac.target) || [];
   assert.ok(macTargets.some((t) => t.target === 'dmg' && (t.arch || []).includes('arm64')), 'mac build must produce an arm64 dmg');
   assert.ok(pkg.scripts['dist:mac'], 'mac dist script must exist');
+  // file names must name their OS (extensions alone don't tell friends apart)
+  for (const [section, os] of [[pkg.build.nsis, 'Windows'], [pkg.build.portable, 'Windows'], [pkg.build.linux, 'Linux'], [pkg.build.mac, 'macOS']]) {
+    assert.ok(section && section.artifactName && section.artifactName.includes(os),
+      `release file name must name ${os}`);
+  }
   // release workflow: bounded artifacts (500 MB account quota) + automatic
   // Releases on tags only, never on manual runs
   const workflow = fs.readFileSync(path.join(__dirname, '../.github/workflows/release.yml'), 'utf8');

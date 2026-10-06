@@ -14,18 +14,18 @@ How it works: a small built-in LLM turns your sentence into instructions for FFm
 
 ### Windows
 
-- **Setup - recommended!** (`PlainFFmpeg-Setup.exe`) - installs the app and everything it needs.
-- **Portable** (`PlainFFmpeg-Portable.exe`) - no install, runs from any folder or USB stick. It cannot install the Microsoft Visual C++ Redistributable (x64) that it needs, so on PCs that lack it, you need to install that first (the app informs you and gives you the link).
+- **Setup - recommended!** (`PlainFFmpeg-Windows-Setup.exe`) - installs the app and everything it needs.
+- **Portable** (`PlainFFmpeg-Windows-Portable.exe`) - no install, runs from any folder or USB stick. It cannot install the Microsoft Visual C++ Redistributable (x64) that it needs, so on PCs that lack it, you need to install that first (the app informs you and gives you the link).
 
 SmartScreen may show a blue *"Windows protected your PC"* warning since the app is not code-signed yet - click **More info**, then **Run anyway**.
 
 ### Linux
 
-Just one file: the `.AppImage`. Make it executable and run it.
+Just one file: look for `PlainFFmpeg-Linux` (ending in `.AppImage`). Make it executable and run it.
 
 ### macOS (Apple Silicon only)
 
-Grab the `.dmg` file, open it, and drag PlainFFmpeg to Applications. Since the app is not signed by Apple, macOS may block the first launch - right-click (or Control-click) the app, choose Open, then Open again.
+Grab the `PlainFFmpeg-macOS` file (ending in `.dmg`), open it, and drag PlainFFmpeg to Applications. Since the app is not signed by Apple, macOS may block the first launch - right-click (or Control-click) the app, choose Open, then Open again.
 
 ## Your first video in 3 steps
 

@@ -63,7 +63,7 @@
       "oneClick": false,
       "perMachine": false,
       "allowToChangeInstallationDirectory": true,
-      "artifactName": "PlainFFmpeg-Setup-${version}.exe",
+      "artifactName": "PlainFFmpeg-Windows-Setup-${version}.exe",
       "installerIcon": "assets/icon.ico",
       "uninstallerIcon": "assets/icon.ico",
       "installerSidebar": "assets/installerSidebar.bmp",
@@ -72,7 +72,7 @@
       "include": "assets/vc-redist.nsh"
     },
     "portable": {
-      "artifactName": "PlainFFmpeg-Portable-${version}.exe"
+      "artifactName": "PlainFFmpeg-Windows-Portable-${version}.exe"
     },
     "linux": {
       "icon": "assets/logo.png",
@@ -80,7 +80,7 @@
       "target": [
         { "target": "AppImage", "arch": ["x64"] }
       ],
-      "artifactName": "PlainFFmpeg-${version}-x86_64.AppImage"
+      "artifactName": "PlainFFmpeg-Linux-${version}-x86_64.AppImage"
     },
     "mac": {
       "icon": "assets/icon.icns",
@@ -88,7 +88,7 @@
       "target": [
         { "target": "dmg", "arch": ["arm64"] }
       ],
-      "artifactName": "PlainFFmpeg-${version}-arm64.dmg"
+      "artifactName": "PlainFFmpeg-macOS-${version}-arm64.dmg"
     },
     "dmg": {
       "sign": false
