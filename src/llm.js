@@ -146,7 +146,7 @@ async function llamaPrebuiltProbe() {
   try {
     const plat = process.platform === 'win32' ? 'win-x64'
       : process.platform === 'darwin'
-        ? (process.arch === 'arm64' ? 'mac-arm64' : 'mac-x64')
+        ? (process.arch === 'arm64' ? 'mac-arm64-metal' : 'mac-x64')
         : (process.arch === 'arm64' ? 'linux-arm64' : 'linux-x64');
     out.package = `@node-llama-cpp/${plat}`;
     const mod = await import(`@node-llama-cpp/${plat}`);
