@@ -965,6 +965,11 @@ async function main() {
   assert.ok((pkg.build.asarUnpack || []).some((p) => p.includes('@node-llama-cpp')), 'native LLM bins must be unpacked from asar');
   assert.ok((pkg.build.asarUnpack || []).some((p) => p.includes('ffmpeg-static')), 'ffmpeg binary must be unpacked from asar');
   assert.ok(!(pkg.build.files || []).some((f) => f.includes('.gguf')), 'installer stays thin - no model weights bundled');
+  // CPU-only app: GPU prebuilt variants must not ship (hundreds of MB dead)
+  for (const pat of ['*-cuda*', '*-vulkan*']) {
+    assert.ok((pkg.build.files || []).some((f) => f === `!**/node_modules/@node-llama-cpp/${pat}/**`),
+      `packaging must exclude GPU variants (${pat})`);
+  }
   assert.ok((pkg.build.files || []).includes('scripts/download-model.js'), 'first-launch downloader must ship in the app');
   assert.strictEqual(pkg.build.nsis && pkg.build.nsis.include, 'assets/vc-redist.nsh', 'installer must bundle the MSVC redist step');
   // installer branding: app icon plus warm-charcoal sidebar/header bitmaps

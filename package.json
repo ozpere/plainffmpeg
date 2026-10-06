@@ -42,7 +42,9 @@
       "assets/logo.png",
       "assets/icon.ico",
       "assets/icon.icns",
-      "package.json"
+      "package.json",
+      "!**/node_modules/@node-llama-cpp/*-cuda*/**",
+      "!**/node_modules/@node-llama-cpp/*-vulkan*/**"
     ],
     "asar": true,
     "asarUnpack": [
