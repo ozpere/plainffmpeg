@@ -31,9 +31,9 @@ jobs:
     permissions:
       contents: read
     env:
-      # CPU-only LLM binaries (skip the Vulkan dead end) + no ~1.3 GB model
-      # fetch during install (thin installer - the app downloads it on first
-      # launch instead).
+      # CPU-only install-time check (skip the Vulkan attempt on GPU-less CI;
+      # the GPU prebuilts still install for the packaged app) + no ~1.3 GB
+      # model fetch during install (thin installer - downloaded on first launch).
       NODE_LLAMA_CPP_GPU: 'false'
       SKIP_MODEL_DOWNLOAD: '1'
     steps:
@@ -52,6 +52,21 @@ jobs:
         run: npm run test:headless
       - name: Build installer + portable
         run: npm run dist:win
+      - name: Verify GPU prebuilt shipped
+        shell: pwsh
+        run: |
+          $nlc = "dist/win-unpacked/resources/app.asar.unpacked/node_modules/@node-llama-cpp"
+          $cpu = Join-Path $nlc "win-x64/bins/win-x64/llama-addon.node"
+          $vulkan = Join-Path $nlc "win-x64-vulkan/bins/win-x64-vulkan/llama-addon.node"
+          foreach ($binary in @($cpu, $vulkan)) {
+            if (-not (Test-Path $binary)) {
+              throw "LLM prebuilt missing from the Windows build: $binary"
+            }
+          }
+          if (Get-ChildItem $nlc -Directory -Filter "*-cuda*") {
+            throw "CUDA prebuilt must not ship in the Windows build"
+          }
+          Write-Host "CPU + Vulkan prebuilts present; CUDA prebuilts absent."
       - name: Upload installer
         uses: actions/upload-artifact@v6
         with:
@@ -74,6 +89,7 @@ jobs:
     permissions:
       contents: read
     env:
+      # CPU-only install-time check; the Vulkan prebuilt still installs.
       NODE_LLAMA_CPP_GPU: 'false'
       SKIP_MODEL_DOWNLOAD: '1'
     steps:

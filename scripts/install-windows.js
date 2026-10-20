@@ -13,8 +13,10 @@
  *      with "Filename too long" once node_modules paths exceed MAX_PATH.
  *
  * This script avoids all three:
- *   - forces CPU-only binaries via NODE_LLAMA_CPP_GPU=false
- *     (no Vulkan attempt, no source build, no git clone of llama.cpp),
+ *   - runs the install-time check against the CPU backend via
+ *     NODE_LLAMA_CPP_GPU=false (no Vulkan attempt during install, no source
+ *     build, no git clone of llama.cpp; npm still installs the optional
+ *     prebuilts, so the app keeps GPU acceleration at run time),
  *   - enables git long paths as a safety net,
  *   - warns about long project paths and a missing MSVC runtime,
  *   - verifies the native binary loads after install.
@@ -110,7 +112,7 @@ if (CHECK_ONLY) {
   process.exit(0);
 }
 
-// --- install (CPU-only llama binaries, no Vulkan, no source build) ------------
+// --- install (CPU-only check, no Vulkan attempt, no source build) ------------
 // The ~1.3 GB model fetch is off by default: installs stay fast and work
 // offline, and first launch (or `npm run download-model`) covers it.
 // Export SKIP_MODEL_DOWNLOAD=0 to fetch during install anyway.
@@ -119,7 +121,7 @@ const env = {
   NODE_LLAMA_CPP_GPU: 'false',
   SKIP_MODEL_DOWNLOAD: process.env.SKIP_MODEL_DOWNLOAD ?? '1',
 };
-log('running npm install with NODE_LLAMA_CPP_GPU=false (CPU-only prebuilt binary)...');
+log('running npm install with NODE_LLAMA_CPP_GPU=false (CPU-only install check; GPU prebuilts still install)...');
 if (env.SKIP_MODEL_DOWNLOAD === '1') {
   log('SKIP_MODEL_DOWNLOAD=1 (model fetch deferred to first launch; export SKIP_MODEL_DOWNLOAD=0 to fetch now).');
 }

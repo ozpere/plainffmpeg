@@ -93,6 +93,8 @@ let llamaSequence = null;
 let llamaModel = null;
 let llamaContext = null;
 let llamaLoadError = null;
+// Selected by getLlama: "cuda" | "vulkan" | "metal" | false (CPU); null before init.
+let llamaBackend = null;
 
 function isLlamaLoading() {
   return llamaSession === null && llamaInitPromise !== null;
@@ -106,10 +108,14 @@ function getLlamaLoadError() {
   return llamaLoadError;
 }
 
+function getLlamaBackend() {
+  return llamaBackend;
+}
+
 // Snapshot of everything the LLM load depends on. Never throws - turns
 // "it doesn't load" into a pasteable answer.
 async function llamaDiagnostics() {
-  const d = { ok: !!llamaSession };
+  const d = { ok: !!llamaSession, gpu: llamaBackend };
   try { d.node = process.versions.node || null; } catch { d.node = null; }
   try { d.modules = process.versions.modules || null; } catch { d.modules = null; }
   try { d.electron = (process.versions && process.versions.electron) || null; } catch { d.electron = null; }
@@ -185,8 +191,9 @@ async function llamaDiagSummary() {
       const m = d.msvc;
       if (m && m.applicable) msvcBit = ` msvc=${m.present ? 'ok' : 'missing:' + (m.missing || []).join(',')}`;
     } catch { /* keep n/a */ }
+    const gpuBit = ` gpu=${d.gpu === null ? 'n/a' : (d.gpu || 'cpu')}`;
     return `node=${d.node || '?'} modules=${d.modules || '?'} electron=${d.electron || 'n/a'} ` +
-      `model=${d.modelExists ? d.modelSize + 'B' : 'missing'} bins=[${bins}]${msvcBit}`;
+      `model=${d.modelExists ? d.modelSize + 'B' : 'missing'} bins=[${bins}]${msvcBit}${gpuBit}`;
   } catch { return 'diagnostics unavailable'; }
 }
 
@@ -204,7 +211,9 @@ async function getLlamaSession() {
     // node-llama-cpp v3 is pure ESM, so this CommonJS process loads it
     // via dynamic import() (require() throws ERR_REQUIRE_ESM).
     const { getLlama, LlamaChatSession } = await import('node-llama-cpp');
-    const llama = await getLlama();
+    // Auto picks CUDA/Vulkan/Metal when the driver provides it, else CPU.
+    const llama = await getLlama({ gpu: 'auto' });
+    llamaBackend = llama.gpu;
     llamaModel = await llama.loadModel({ modelPath });
     llamaContext = await llamaModel.createContext();
     llamaSequence = llamaContext.getSequence();
@@ -212,7 +221,7 @@ async function getLlamaSession() {
       contextSequence: llamaSequence,
       systemPrompt: SYSTEM_PROMPT,
     });
-    console.log('[main] node-llama-cpp model loaded:', modelPath);
+    console.log('[main] node-llama-cpp model loaded:', modelPath, 'backend:', llamaBackend || 'CPU');
     return llamaSession;
   })();
 
@@ -232,6 +241,7 @@ module.exports = {
   isLlamaLoading,
   hasLlamaSession,
   getLlamaLoadError,
+  getLlamaBackend,
   llamaDiagnostics,
   llamaPrebuiltProbe,
   llamaDiagSummary,

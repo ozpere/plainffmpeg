@@ -78,12 +78,15 @@ npm run install:win
 npm start
 ```
 
-`install:win` forces CPU-only LLM binaries,
-runs the preflight checks, and verifies the native binary loads. It skips
-the ~1.3 GB model fetch by default (fast, offline-friendly installs) -
-first launch downloads it in-app, or run `npm run download-model` anytime
-(`SKIP_MODEL_DOWNLOAD=0` fetches during install). Plain `npm install`
-still fetches via `postinstall`, skipped when offline.
+`install:win` runs the preflight checks, verifies the native binary loads
+with a CPU-only check (no GPU needed at install time), and skips the ~1.3 GB
+model fetch by default (fast, offline-friendly installs) - first launch
+downloads it in-app, or run `npm run download-model` anytime
+(`SKIP_MODEL_DOWNLOAD=0` fetches during install). Plain `npm install` still
+fetches via `postinstall`, skipped when offline. At runtime, translation uses
+the GPU automatically when the graphics driver provides it (Vulkan on
+Windows/Linux, Metal on Apple Silicon), and falls back to the CPU otherwise.
+The engine badge shows which backend is active.
 
 To build distributables: `npm run dist:win` produces the thin installer + portable
 exe into `dist/` (fetches the MSVC redist itself, installs it silently),
@@ -121,7 +124,7 @@ src/
 scripts/
   download-model.js    GGUF fetcher (Hugging Face, resumable, format-checked)
   fetch-vc-redist.js   MSVC redist fetcher (build-time only, not committed)
-  install-windows.js   Windows install helper (CPU-only, long paths, MSVC check)
+  install-windows.js   Windows install helper (preflight, long paths, MSVC check)
   smoke-test.js        Headless verification suite
   translate-cases.js   Regression corpus (raw model output → final args)
 assets/                Logo, platform icons, branded installer art, NSIS hooks, README demo gif

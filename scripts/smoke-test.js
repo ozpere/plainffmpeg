@@ -653,6 +653,7 @@ async function main() {
       `${name} must not require() node-llama-cpp (ESM-only)`
     );
   }
+  assert.ok(llmSrc.includes("getLlama({ gpu: 'auto' })"), 'engine must request GPU with CPU fallback');
 
   // preload/renderer/html sources (declared early - used by several blocks below)
   const preload = fs.readFileSync(path.join(__dirname, '../src/preload.js'), 'utf8');
@@ -671,7 +672,7 @@ async function main() {
   assert.ok(msvc && typeof msvc.present === 'boolean' && Array.isArray(msvc.missing), 'msvc status must report present/missing');
   assert.doesNotThrow(() => mainMod.isMsvcMissingError(new Error('NoBinaryFoundError: test')), 'msvc classifier must never throw');
   const diagProbe = await mainMod.llamaDiagnostics();
-  for (const k of ['ok', 'node', 'modules', 'modelExists', 'msvc']) {
+  for (const k of ['ok', 'node', 'modules', 'modelExists', 'msvc', 'gpu']) {
     assert.ok(k in diagProbe, `diagnostics must include ${k}`);
   }
   // llamaResolved exists post-install; pre-install only the resolve error does.
@@ -818,6 +819,8 @@ async function main() {
   assert.strictEqual(typeof st.loading, 'boolean', 'status must expose loading flag');
   assert.ok('loadError' in st, 'status must expose loadError');
   assert.ok('loadErrorKind' in st, 'status must expose the classified error kind');
+  assert.ok('gpu' in st, 'status must expose the LLM compute backend');
+  assert.strictEqual(st.gpu, null, 'backend is unknown before the model loads');
   assert.ok(st.msvc && typeof st.msvc.present === 'boolean', 'status must expose the MSVC runtime state');
   assert.strictEqual(st.ready, false, 'ready must be false before any session exists');
   assert.strictEqual(st.portableWritable, null, 'writability is null outside portable runs');
@@ -965,11 +968,19 @@ async function main() {
   assert.ok((pkg.build.asarUnpack || []).some((p) => p.includes('@node-llama-cpp')), 'native LLM bins must be unpacked from asar');
   assert.ok((pkg.build.asarUnpack || []).some((p) => p.includes('ffmpeg-static')), 'ffmpeg binary must be unpacked from asar');
   assert.ok(!(pkg.build.files || []).some((f) => f.includes('.gguf')), 'installer stays thin - no model weights bundled');
-  // NVIDIA fast path ships (CUDA base); the 368 MB ext fallback package
-  // and the flaky Vulkan variant must never ship
-  for (const pat of ['*-cuda-ext*', '*-vulkan*']) {
-    assert.ok((pkg.build.files || []).some((f) => f === `!**/node_modules/@node-llama-cpp/${pat}/**`),
-      `packaging must exclude GPU variants (${pat})`);
+  // The Vulkan prebuilt is the driver-only GPU path (NVIDIA/AMD/Intel).
+  // CUDA variants stay out: the base needs a system CUDA Toolkit and the
+  // ext package adds ~368 MB.
+  assert.ok((pkg.build.files || []).some((f) => f === '!**/node_modules/@node-llama-cpp/*-cuda*/**'),
+    'packaging must exclude CUDA variants');
+  assert.ok(!(pkg.build.files || []).some((f) => f.includes('*-vulkan*')),
+    'packaging must ship the Vulkan prebuilt for GPU acceleration');
+  // Platform prebuilts live in node-llama-cpp's optional dependencies; keep
+  // them in the lock so CI installs the GPU binary for the target platform.
+  const lock = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package-lock.json'), 'utf8'));
+  for (const name of ['win-x64-vulkan', 'linux-x64-vulkan', 'mac-arm64-metal']) {
+    assert.ok(lock.packages && lock.packages[`node_modules/@node-llama-cpp/${name}`],
+      `lockfile must keep the ${name} prebuilt`);
   }
   assert.ok((pkg.build.files || []).includes('scripts/download-model.js'), 'first-launch downloader must ship in the app');
   assert.strictEqual(pkg.build.nsis && pkg.build.nsis.include, 'assets/vc-redist.nsh', 'installer must bundle the MSVC redist step');

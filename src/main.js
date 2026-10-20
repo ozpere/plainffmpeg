@@ -72,6 +72,7 @@ const {
   isLlamaLoading,
   hasLlamaSession,
   getLlamaLoadError,
+  getLlamaBackend,
   llamaDiagnostics,
   llamaDiagSummary,
   getLlamaSession,
@@ -314,8 +315,14 @@ function handleModelStatus() {
   try { msvc = msvcRuntimeStatus(); } catch { msvc = null; }
   const failed = exists && !hasSession && loadError && !loading;
   const msvcMissing = !!(failed && isMsvcMissingError(loadError));
+  const gpu = getLlamaBackend();
+  const gpuLabel = gpu === false ? 'CPU'
+    : gpu === 'cuda' ? 'CUDA'
+      : gpu === 'vulkan' ? 'Vulkan'
+        : gpu === 'metal' ? 'Metal'
+          : null;
   let engine;
-  if (ready) engine = 'node-llama-cpp (local GGUF)';
+  if (ready) engine = `node-llama-cpp (local GGUF${gpuLabel ? ', ' + gpuLabel : ''})`;
   else if (!exists) engine = 'Local LLM unavailable';
   else if (loading) engine = 'Loading local LLM engine…';
   else if (failed) engine = 'Local LLM failed to load';
@@ -331,6 +338,7 @@ function handleModelStatus() {
     msvc,
     ffmpegPath: ffmpegPath || null,
     engine,
+    gpu,
     ready,
     portable: isPortableLaunch(),
     fallbackToAppData: portableFallbackActive(),
