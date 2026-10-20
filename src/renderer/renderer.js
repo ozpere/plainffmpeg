@@ -54,6 +54,12 @@
   let lastArgs = null;
   let lastOutputExt = ''; // container from the translation (templated {output} has no extension)
   let modelDownloading = false; // model fetch in flight - keep its card up
+  let translating = false;      // translation in flight - blocks run/edits
+  let runStarting = false;      // overwrite prompt through spawn - blocks a second Run
+  let activeRunId = 0;          // progress events for older runs are ignored
+  let nextRunId = 0;
+  let probeSeq = 0;             // stale probe callbacks must not touch the new file
+  let cmdUserEdited = false;    // typed command survives a failed translation
 
   function log(line) {
     terminal.textContent += line + '\n';
@@ -114,6 +120,36 @@
     if (!dir) return file;
     const sep = dir.includes('\\') ? '\\' : '/';
     return dir + (dir.endsWith('/') || dir.endsWith('\\') ? '' : sep) + file;
+  }
+
+  // Best-effort same-path check for the renderer. The main process resolves
+  // symlinks/hardlinks; this catches exact, dot-segment, and Windows case
+  // aliases before the overwrite prompt or spawn.
+  function normalizePathForCompare(p) {
+    let s = String(p || '').trim().replace(/\\/g, '/');
+    if (!s) return '';
+    const unc = s.startsWith('//');
+    const drive = /^[A-Za-z]:/.test(s);
+    let prefix = '';
+    if (unc) { prefix = '//'; s = s.slice(2); }
+    else if (drive) { prefix = s.slice(0, 2); s = s.slice(2); }
+    else if (s.startsWith('/')) { prefix = '/'; s = s.slice(1); }
+    const parts = [];
+    for (const seg of s.split('/')) {
+      if (!seg || seg === '.') continue;
+      if (seg === '..') { if (parts.length) parts.pop(); continue; }
+      parts.push(seg);
+    }
+    let out = prefix + (prefix && !prefix.endsWith('/') ? '/' : '') + parts.join('/');
+    out = out.replace(/\/+$/, '');
+    if (!out) out = prefix;
+    return (drive || unc) ? out.toLowerCase() : out;
+  }
+
+  function sameLoosePath(a, b) {
+    const na = normalizePathForCompare(a);
+    const nb = normalizePathForCompare(b);
+    return !!na && na === nb;
   }
 
   // Default output: same directory as the input, named `<name>-out.<ext>`.
@@ -220,8 +256,8 @@
 
   function refreshRunEnabled() {
     // While FFmpeg runs the button is Stop and must stay clickable,
-    // whatever the box holds.
-    runBtn.disabled = ffmpegRunning ? false : !effectiveArgs();
+    // whatever the box holds. Translation and the overwrite prompt lock Run.
+    runBtn.disabled = ffmpegRunning ? false : (translating || runStarting || !effectiveArgs());
   }
 
   function setBadge(state, text) {
@@ -336,6 +372,13 @@
   }
 
   function setFile(p) {
+    // Never swap the source under a live run: the command and temp inputs
+    // belong to the file that started it.
+    if (ffmpegRunning || runStarting) {
+      showBanner('Stop FFmpeg before loading a different video.');
+      return;
+    }
+    probeSeq += 1;
     inputFile = p;
     mediaDuration = null;
     mediaWidth = null;
@@ -343,6 +386,7 @@
     probing = false;
     probeFailed = false;
     outputManual = false;
+    cmdUserEdited = false;
     // A new (or cleared) input invalidates the previous translation: keep
     // no stale command, output, or statuses around to run by accident.
     outputFile = null;
@@ -381,12 +425,15 @@
     refreshOutputDisplay();
     // Probe duration/resolution in the background: shown in the label and
     // used to resolve "last N seconds" at translate time.
+    const probeId = probeSeq;
     probing = true;
     probeFailed = false;
     window.api.probeMedia(p).then(
       (meta) => {
+        // A stale probe must not clear the new file's probing state.
+        if (probeId !== probeSeq || inputFile !== p) return;
         probing = false;
-        if (inputFile !== p || !meta) return;
+        if (!meta) return;
         mediaDuration = meta.duration;
         mediaWidth = meta.width || null;
         mediaHeight = meta.height || null;
@@ -398,6 +445,7 @@
         log(`probed: ${bits.join(' · ') || 'no metadata'}`);
       },
       (err) => {
+        if (probeId !== probeSeq || inputFile !== p) return;
         probing = false;
         probeFailed = true;
         log('probe failed: ' + (err && err.message ? err.message : err));
@@ -486,6 +534,11 @@
 
   async function translate() {
     const text = instruction.value.trim();
+    if (translating) return null;
+    if (ffmpegRunning || runStarting) {
+      showBanner('Stop FFmpeg before translating again.');
+      return null;
+    }
     if (!inputFile) {
       showBanner('Load a video first - drag & drop a file onto the card or press Browse.');
       return null;
@@ -502,30 +555,37 @@
       return null;
     }
     clearError();
+    engineNote.textContent = '';
+    translating = true;
     translateBtn.disabled = true;
     translateOnlyBtn.disabled = true;
-    runBtn.disabled = true;
+    instruction.disabled = true;
+    if (cmdOut) cmdOut.disabled = true;
     paintBar(barTranslate, null);
     setStatus(translateStatus, 'st-active', 'Translating…');
     log(`translating: "${text}" …`);
     const translateFile = inputFile;
+    const translateText = text;
+    refreshRunEnabled();
     try {
       const res = await window.api.translatePrompt({ instruction: text, inputFile, duration: mediaDuration, width: mediaWidth, height: mediaHeight });
-      if (inputFile !== translateFile) {
-        // Video switched mid-translation: the result was computed for the
-        // old video (and its duration). Drop it rather than running stale
-        // flags against the new video.
+      if (inputFile !== translateFile || instruction.value.trim() !== translateText) {
+        // Video or instruction changed mid-translation: the result was
+        // computed for the old request. Drop it rather than running stale
+        // flags against the new state.
         paintBar(barTranslate, 0);
         setStatus(translateStatus, 'st-idle', 'Idle');
-        log('translation superseded by video switch - discarded.');
+        log('translation superseded by a video or instruction change - discarded.');
         refreshRunEnabled();
         return null;
       }
       if (!res || res.ok === false) {
         // LLM failure: never execute the translation. Typed edits stay put -
-        // they do not depend on the LLM and remain runnable.
+        // they do not depend on the LLM and remain runnable. An untouched
+        // box is cleared so an older command cannot be run by accident.
         lastArgs = null;
         lastOutputExt = '';
+        if (cmdOut && !cmdUserEdited) cmdOut.value = '';
         paintBar(barTranslate, 0);
         setStatus(translateStatus, 'st-failed', 'Failed');
         if (res && res.raw) log('raw LLM output (truncated): ' + String(res.raw).slice(0, 800));
@@ -538,6 +598,7 @@
       }
       lastArgs = res.args;
       lastOutputExt = res.outputExt || '';
+      cmdUserEdited = false;
       if (cmdOut) cmdOut.value = 'ffmpeg ' + res.argsString;
       if (res.corrections && res.corrections.length > 0) {
         for (const c of res.corrections) log('auto-corrected: ' + c);
@@ -556,6 +617,7 @@
     } catch (e) {
       lastArgs = null;
       lastOutputExt = '';
+      if (cmdOut && !cmdUserEdited) cmdOut.value = '';
       paintBar(barTranslate, 0);
       setStatus(translateStatus, 'st-failed', 'Failed');
       showError((e && e.message ? e.message : e) || 'unknown error');
@@ -563,6 +625,9 @@
       refreshRunEnabled();
       return null;
     } finally {
+      translating = false;
+      instruction.disabled = false;
+      if (cmdOut) cmdOut.disabled = false;
       translateBtn.disabled = false;
       translateOnlyBtn.disabled = false;
       refreshRunEnabled();
@@ -570,6 +635,13 @@
   }
 
   async function run() {
+    if (translating) {
+      showBanner('Wait for the translation to finish before running FFmpeg.');
+      return;
+    }
+    if (ffmpegRunning || runStarting) return;
+    // Snapshot the request before any await: the overwrite prompt must not
+    // let a later edit change what this click actually runs.
     const args = effectiveArgs();
     if (!args) {
       log('Nothing to run - translate first or type your own command.');
@@ -583,56 +655,80 @@
       showBanner('Your command needs an input (-i) - translate first or fix the command.');
       return;
     }
-    // inputFile and output are guaranteed here: effectiveArgs only exists
-    // after a successful translate or a typed command (both need a video),
-    // and setFile clears both.
+    const runInput = inputFile;
     const out = effectiveOutput();
-    // Ask (in-app modal) before overwriting an existing file.
-    try {
-      if (await window.api.outputExists(out)) {
-        log(`output already exists: ${out}`);
-        const go = await confirmOverwriteUI(out);
-        if (!go) {
-          setStatus(ffmpegStatus, 'st-cancelled', 'Cancelled');
-          log('run cancelled - existing file kept.');
-          return;
-        }
-      }
-    } catch (e) {
-      log('overwrite check unavailable, continuing: ' + (e && e.message ? e.message : e));
+    const runExt = translatedExt() || undefined;
+    if (out && sameLoosePath(runInput, out)) {
+      showBanner('Input and output are the same file. Choose a different output path.');
+      return;
     }
-    runBtn.disabled = false;
+    runStarting = true;
     translateBtn.disabled = true;
     translateOnlyBtn.disabled = true;
-    ffmpegRunning = true;
-    runBtn.textContent = STOP_LABEL;
-    paintBar(barFfmpeg, 0);
-    setStatus(ffmpegStatus, 'st-active', 'Running…');
-    log(`running ffmpeg → ${out}…`);
+    refreshRunEnabled();
     try {
-      const res = await window.api.runFfmpeg({ args, outputFile: out, inputFile, outputExt: translatedExt() || undefined });
-      if (res && res.cancelled) {
-        setStatus(ffmpegStatus, 'st-cancelled', 'Cancelled');
-        log('run cancelled - partial output kept.');
-      } else {
-        paintBar(barFfmpeg, 100);
-        setStatus(ffmpegStatus, 'st-done', 'Done');
-        log('done → ' + (res && res.output ? res.output : 'ok'));
+      // Ask (in-app modal) before overwriting an existing file.
+      try {
+        if (out && await window.api.outputExists(out)) {
+          log(`output already exists: ${out}`);
+          const go = await confirmOverwriteUI(out);
+          if (!go) {
+            setStatus(ffmpegStatus, 'st-cancelled', 'Cancelled');
+            log('run cancelled - existing file kept.');
+            return;
+          }
+        }
+      } catch (e) {
+        log('overwrite check unavailable, continuing: ' + (e && e.message ? e.message : e));
       }
-    } catch (e) {
-      setStatus(ffmpegStatus, 'st-failed', 'Failed');
-      // Failures surface themselves: expand the collapsed-by-default logs.
-      terminal.hidden = false;
-      toggleLogsBtn.textContent = 'Hide logs';
-      terminal.scrollTop = terminal.scrollHeight;
-      log('ffmpeg failed: ' + (e && e.message ? e.message : e));
-    } finally {
-      // A video switched mid-run cleared the commands - do not re-enable then.
-      ffmpegRunning = false;
-      runBtn.textContent = RUN_LABEL;
+      if (inputFile !== runInput) return;
+      runStarting = false;
+      ffmpegRunning = true;
+      activeRunId = ++nextRunId;
+      const runId = activeRunId;
+      runBtn.textContent = STOP_LABEL;
       refreshRunEnabled();
-      translateBtn.disabled = false;
-      translateOnlyBtn.disabled = false;
+      paintBar(barFfmpeg, 0);
+      setStatus(ffmpegStatus, 'st-active', 'Running…');
+      log(`running ffmpeg → ${out}…`);
+      try {
+        const res = await window.api.runFfmpeg({
+          args,
+          outputFile: out,
+          inputFile: runInput,
+          outputExt: runExt,
+          runId,
+        });
+        if (runId !== activeRunId) return;
+        if (res && res.cancelled) {
+          setStatus(ffmpegStatus, 'st-cancelled', 'Cancelled');
+          log('run cancelled - partial output kept.');
+        } else {
+          paintBar(barFfmpeg, 100);
+          setStatus(ffmpegStatus, 'st-done', 'Done');
+          log('done → ' + (res && res.output ? res.output : 'ok'));
+        }
+      } catch (e) {
+        if (runId !== activeRunId) return;
+        setStatus(ffmpegStatus, 'st-failed', 'Failed');
+        // Failures surface themselves: expand the collapsed-by-default logs.
+        terminal.hidden = false;
+        toggleLogsBtn.textContent = 'Hide logs';
+        terminal.scrollTop = terminal.scrollHeight;
+        log('ffmpeg failed: ' + (e && e.message ? e.message : e));
+      } finally {
+        ffmpegRunning = false;
+        activeRunId = 0;
+        runBtn.textContent = RUN_LABEL;
+      }
+    } finally {
+      runStarting = false;
+      if (!ffmpegRunning) {
+        runBtn.textContent = RUN_LABEL;
+        refreshRunEnabled();
+        translateBtn.disabled = false;
+        translateOnlyBtn.disabled = false;
+      }
     }
   }
 
@@ -768,23 +864,27 @@
     dropzone.classList.remove('over');
     diagnoseDrop(e);
     const files = filesFromDrop(e);
+    const firstFile = files[0] || null;
+    // DataTransfer is cleared once the event handler awaits: snapshot every
+    // flavor that will be needed after the native-path relay.
+    const viaUri = pathsFromUriList(e.dataTransfer);
     if (files.length > 1) {
       log(`multiple files dropped - using the first one only (${files.length - 1} ignored).`);
     }
-    if (files.length > 0 && files[0] && files[0].path) {
-      log(`drop received: ${files[0].name || files[0].path}`);
-      setFile(files[0].path);
+    if (firstFile && firstFile.path) {
+      log(`drop received: ${firstFile.name || firstFile.path}`);
+      setFile(firstFile.path);
       return;
     }
-    if (files.length > 0) {
-      log(`drop received: ${files[0] && files[0].name ? files[0].name : '(unnamed file)'}`);
+    if (firstFile) {
+      log(`drop received: ${firstFile.name || '(unnamed file)'}`);
     }
     // No path on the File? Resolve the native path via the preload
     // relay before anything else textual.
-    if (files.length > 0 && files[0]) {
+    if (firstFile) {
       let native = '';
       try {
-        native = await window.api.getDroppedPath(files[0]);
+        native = await window.api.getDroppedPath(firstFile);
       } catch { native = ''; }
       if (native) {
         log(`drop resolved via native path: ${native}`);
@@ -792,16 +892,15 @@
         return;
       }
     }
-    // Still nothing? Try the uri-list flavor…
-    const viaUri = pathsFromUriList(e.dataTransfer);
+    // Still nothing? Try the captured uri-list flavor…
     if (viaUri.length > 0) {
       log(`drop resolved via uri-list: ${viaUri[0]}`);
       setFile(viaUri[0]);
       return;
     }
     // …then fall back to importing the bytes.
-    if (files.length > 0 && files[0]) {
-      importPathlessDrop(files[0]);
+    if (firstFile) {
+      await importPathlessDrop(firstFile);
       return;
     }
     log('drop received but contained no files.');
@@ -853,6 +952,7 @@
 
   translateOnlyBtn.addEventListener('click', translate);
   if (cmdOut) cmdOut.addEventListener('input', () => {
+    cmdUserEdited = true;
     clearError();
     refreshOutputDisplay();
     refreshRunEnabled();
@@ -966,11 +1066,13 @@
   });
   window.api.onProgress((p) => {
     if (!p) return;
+    // Old-run events must not paint over the current run or its result.
+    if (p.runId && p.runId !== activeRunId) return;
+    // Progress events race the invoke result below - only paint while a
+    // run is still live, and never let a cancel flash as Failed first.
+    if (!ffmpegRunning) return;
     if (p.done) {
       paintBar(barFfmpeg, 100);
-      // Progress events race the invoke result below - only paint while a
-      // run is still live, and never let a cancel flash as Failed first.
-      if (!ffmpegRunning) return;
       if (p.cancelled) setStatus(ffmpegStatus, 'st-cancelled', 'Cancelled');
       else if (p.code === 0) setStatus(ffmpegStatus, 'st-done', 'Done');
       else setStatus(ffmpegStatus, 'st-failed', 'Failed');

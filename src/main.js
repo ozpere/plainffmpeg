@@ -5,6 +5,7 @@
  */
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 
 // Local modules: fixups = translation pipeline, paths = on-disk locations,
 // llm = local GGUF engine. This module keeps Electron, IPC, and orchestration.
@@ -38,6 +39,7 @@ const {
   fixupSizeLimit,
   fixupConflicts,
   ensureOutputFile,
+  looksLikeFileToken,
   inferOutputExt,
   resolvePlaceholders,
   parseSizeLimit,
@@ -265,22 +267,42 @@ function createWindow() {
 
 // Electron bootstrap + IPC - skipped when required in plain Node (smoke tests).
 if (isElectron) {
-  // Remove the default application menu (File, Edit, View, ...) entirely.
-  try {
-    if (Menu) Menu.setApplicationMenu(null);
-  } catch { /* ignore */ }
-  app.whenReady().then(() => {
-    createWindow();
-    // Window first (instant UI), LLM right after in the background.
-    preloadLlm();
-    app.on('activate', () => {
-      if (BrowserWindow.getAllWindows().length === 0) createWindow();
+  // A second instance would race the same output file and model download.
+  const hasSingleInstanceLock = typeof app.requestSingleInstanceLock !== 'function'
+    || app.requestSingleInstanceLock();
+  if (!hasSingleInstanceLock) {
+    app.quit();
+  } else {
+    // Remove the default application menu (File, Edit, View, ...) entirely.
+    try {
+      if (Menu) Menu.setApplicationMenu(null);
+    } catch { /* ignore */ }
+    app.on('second-instance', () => {
+      const w = validWindow();
+      if (!w) return;
+      if (w.isMinimized()) w.restore();
+      w.focus();
     });
-  });
+    app.whenReady().then(() => {
+      createWindow();
+      // Window first (instant UI), LLM right after in the background.
+      preloadLlm();
+      app.on('activate', () => {
+        if (BrowserWindow.getAllWindows().length === 0) createWindow();
+      });
+    });
 
-  app.on('window-all-closed', () => {
-    if (process.platform !== 'darwin') app.quit();
-  });
+    // Closing the window while FFmpeg runs must not leave an orphan process.
+    app.on('before-quit', () => {
+      if (!runningProc) return;
+      try { if (runningCancel) runningCancel(); } catch { /* ignore */ }
+      try { runningProc.kill(); } catch { /* ignore */ }
+    });
+
+    app.on('window-all-closed', () => {
+      if (process.platform !== 'darwin') app.quit();
+    });
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -526,8 +548,10 @@ async function handleSaveDroppedFile({ name, buffer } = {}) {
   const dir = dropsDir();
   fs.mkdirSync(dir, { recursive: true });
   const safe = String(name || 'dropped-video').replace(/[^\w.\-() ]+/g, '_').slice(-120) || 'dropped-video';
-  const target = path.join(dir, safe);
-  fs.writeFileSync(target, Buffer.from(buffer));
+  // Unique prefix: repeated drops of the same filename must not overwrite a
+  // file the current run may still be reading.
+  const target = path.join(dir, `${crypto.randomUUID()}-${safe}`);
+  fs.writeFileSync(target, Buffer.from(buffer), { flag: 'wx' });
   return target;
 }
 
@@ -564,12 +588,91 @@ async function probeMedia(inputFile) {
   });
 }
 
+// Path aliases (symlink, hardlink, case-insensitive volume) must never let
+// the output overwrite the input. FFmpeg refuses the exact same string, but
+// aliases otherwise cut the source in place.
+function canonicalPath(p) {
+  const abs = path.resolve(String(p || ''));
+  try {
+    return fs.realpathSync.native ? fs.realpathSync.native(abs) : fs.realpathSync(abs);
+  } catch { /* output may not exist yet */ }
+  try {
+    return path.join(fs.realpathSync(path.dirname(abs)), path.basename(abs));
+  } catch {
+    return abs;
+  }
+}
+
+function pathsReferToSameFile(a, b) {
+  if (!a || !b) return false;
+  try {
+    const sa = fs.statSync(a);
+    const sb = fs.statSync(b);
+    if (sa.dev === sb.dev && sa.ino === sb.ino && (sa.ino !== 0 || sb.ino !== 0)) return true;
+  } catch { /* nonexistent output: compare canonical strings */ }
+  let ka = canonicalPath(a);
+  let kb = canonicalPath(b);
+  if (process.platform === 'win32' || process.platform === 'darwin') {
+    ka = ka.toLowerCase();
+    kb = kb.toLowerCase();
+  }
+  return ka === kb;
+}
+
+function assertDistinctPaths(inputPath, outputPath) {
+  if (pathsReferToSameFile(inputPath, outputPath)) {
+    throw new Error('Input and output resolve to the same file. Choose a different output path.');
+  }
+}
+
+const VALUED_RUN_FLAGS = new Set([
+  '-i', '-ss', '-t', '-to', '-s', '-video_size', '-vf', '-filter:v', '-filter:a',
+  '-filter_complex', '-c', '-c:v', '-c:a', '-b:v', '-b:a', '-maxrate', '-bufsize',
+  '-ac', '-ar', '-r', '-pix_fmt', '-crf', '-preset', '-tune', '-movflags', '-map',
+  '-metadata', '-frames', '-frames:v', '-f', '-af', '-aspect', '-fs',
+]);
+
+function looksLikeRunValue(tok) {
+  const t = String(tok || '').trim();
+  return /^\d+(?:\.\d+)?(?:[kKmMgG%])?$/.test(t) || /^\d+(?::\d+){1,2}(?:\.\d+)?$/.test(t);
+}
+
+function coerceRunDestination(dest, outputExt) {
+  if (!dest || typeof outputExt !== 'string' || !outputExt.startsWith('.')) return dest;
+  const s = String(dest);
+  const base = s.slice(Math.max(s.lastIndexOf('/'), s.lastIndexOf('\\')) + 1);
+  const dot = base.lastIndexOf('.');
+  if (dot <= 0) return s + outputExt;
+  if (base.slice(dot).toLowerCase() === outputExt.toLowerCase()) return s;
+  return s.slice(0, s.length - (base.length - dot)) + outputExt;
+}
+
+// Replace the command's trailing output token when it is a real filename;
+// otherwise append dest without splitting a flag/value pair.
+function withTrailingOutput(finalArgs, dest) {
+  if (!dest) return finalArgs;
+  if (!finalArgs.length) return [dest];
+  const last = finalArgs[finalArgs.length - 1];
+  if (last === dest) return finalArgs;
+  const prev = finalArgs[finalArgs.length - 2];
+  const replaceable = last
+    && !String(last).startsWith('-')
+    && !String(last).startsWith('[')
+    && !looksLikeRunValue(last)
+    && looksLikeFileToken(last)
+    && !(prev && VALUED_RUN_FLAGS.has(String(prev)));
+  if (replaceable) finalArgs[finalArgs.length - 1] = dest;
+  else finalArgs.push(dest);
+  return finalArgs;
+}
+
 // Single run at a time: Stop kills it, and the close handler below reports
 // the kill as cancelled, never failed.
 let runningProc = null;
-let runCancelled = false;
+let runningCancel = null;
+let runSeq = 0;
 
-async function handleRunFfmpeg(event, { args, outputFile, inputFile, outputExt }) {
+async function handleRunFfmpeg(event, { args, outputFile, inputFile, outputExt, runId: requestedRunId }) {
   if (!ffmpegPath) throw new Error('ffmpeg-static binary not available.');
   if (!Array.isArray(args) || args.length === 0) throw new Error('No FFmpeg args provided.');
 
@@ -586,40 +689,42 @@ async function handleRunFfmpeg(event, { args, outputFile, inputFile, outputExt }
 
   // Resolve the template tokens to the run's real paths. A custom box
   // without tokens skips this and runs as-is.
-  let dest = outputFile;
-  if (typeof outputExt === 'string' && outputExt.startsWith('.') && dest) {
-    const s = String(dest);
-    const base = s.slice(Math.max(s.lastIndexOf('/'), s.lastIndexOf('\\')) + 1);
-    const dot = base.lastIndexOf('.');
-    if (dot > 0 && base.slice(dot).toLowerCase() !== outputExt.toLowerCase()) {
-      const coerced = s.slice(0, s.length - (base.length - dot)) + outputExt;
-      emit('ffmpeg-log', { line: `output extension follows the command: ${dest} → ${coerced}` });
-      dest = coerced;
-    }
+  let dest = outputFile ? String(outputFile) : null;
+  const coerced = coerceRunDestination(dest, outputExt);
+  if (coerced !== dest) {
+    emit('ffmpeg-log', { line: `output extension follows the command: ${dest} → ${coerced}` });
+    dest = coerced;
   }
   let finalArgs = resolvePlaceholders(args, inputFile, dest);
   if (finalArgs.includes('{input}')) throw new Error('Command uses {input} but no input video was provided.');
   if (finalArgs.includes('{output}')) throw new Error('Command uses {output} but no output destination was provided.');
-  if (dest) {
-    // Replace trailing non-flag token (output path) with explicit dest.
-    const last = finalArgs[finalArgs.length - 1];
-    if (last && !last.startsWith('-')) finalArgs[finalArgs.length - 1] = dest;
-    else finalArgs.push(dest);
+  if (dest) finalArgs = withTrailingOutput(finalArgs, dest);
+  const output = finalArgs[finalArgs.length - 1];
+  let actualInput = inputFile;
+  if (!actualInput) {
+    const iIdx = finalArgs.indexOf('-i');
+    if (iIdx !== -1 && finalArgs[iIdx + 1] && !String(finalArgs[iIdx + 1]).startsWith('-')) {
+      actualInput = finalArgs[iIdx + 1];
+    }
   }
+  // Guard after substitution and extension coercion: symlinks/hardlinks/case
+  // aliases must not overwrite the source.
+  assertDistinctPaths(actualInput, output);
+  const runId = Number.isInteger(requestedRunId) && requestedRunId > 0 ? requestedRunId : ++runSeq;
   // Spawn the binary directly so arbitrary LLM flags run verbatim,
   // while streaming logs to the renderer.
   const { spawn } = require('child_process');
   // -y keeps non-interactive runs from hanging on an overwrite prompt;
   // user consent is gathered beforehand via the overwrite dialog.
   if (!finalArgs.includes('-y') && !finalArgs.includes('-n')) finalArgs.unshift('-y');
-  const output = finalArgs[finalArgs.length - 1];
 
   return await new Promise((resolve, reject) => {
     emit('ffmpeg-log', { line: `$ ${ffmpegPath} ${finalArgs.join(' ')}` });
-    emit('ffmpeg-progress', { pct: 0 });
+    emit('ffmpeg-progress', { runId, pct: 0 });
     const proc = spawn(ffmpegPath, finalArgs, { windowsHide: true });
+    let cancelled = false;
     runningProc = proc;
-    runCancelled = false;
+    runningCancel = () => { cancelled = true; };
     let stderr = '';
     let totalSec = 0;
     // Decode noise repeats line-for-line - collapse runs so logs stay readable.
@@ -654,30 +759,30 @@ async function handleRunFfmpeg(event, { args, outputFile, inputFile, outputExt }
         if (m) {
           if (totalSec > 0) {
             const pct = Math.min(99, (parseHMS(m[1], m[2], m[3]) / totalSec) * 100);
-            emit('ffmpeg-progress', { pct, raw: l.trim() });
+            emit('ffmpeg-progress', { runId, pct, raw: l.trim() });
           } else {
-            emit('ffmpeg-progress', { raw: l.trim() });
+            emit('ffmpeg-progress', { runId, raw: l.trim() });
           }
         }
       }
     });
     proc.stdout.on('data', (d) => emitDeduped(d.toString().trim()));
     proc.on('error', (e) => {
-      runningProc = null;
+      if (runningProc === proc) { runningProc = null; runningCancel = null; }
       flushDeduped();
       emit('ffmpeg-log', { line: `ERROR: ${e.message}` });
       reject(e);
     });
     proc.on('close', (code) => {
-      runningProc = null;
+      if (runningProc === proc) { runningProc = null; runningCancel = null; }
       flushDeduped();
       emit('ffmpeg-log', { line: `ffmpeg exited with code ${code}` });
-      if (runCancelled) {
-        emit('ffmpeg-progress', { done: true, cancelled: true });
+      if (cancelled) {
+        emit('ffmpeg-progress', { runId, done: true, cancelled: true });
         resolve({ cancelled: true });
         return;
       }
-      emit('ffmpeg-progress', { done: true, code });
+      emit('ffmpeg-progress', { runId, done: true, code });
       if (code === 0) resolve({ cancelled: false });
       else {
         const hint = ffmpegFailureHint(stderr);
@@ -685,8 +790,8 @@ async function handleRunFfmpeg(event, { args, outputFile, inputFile, outputExt }
       }
     });
   }).then((runRes) => {
-    if (runRes && runRes.cancelled) return { ok: true, output, cancelled: true };
-    return { ok: true, output };
+    if (runRes && runRes.cancelled) return { ok: true, output, runId, cancelled: true };
+    return { ok: true, output, runId };
   });
 }
 
@@ -695,8 +800,8 @@ async function handleCancelFfmpeg(event) {
   if (!sender || typeof sender.send !== 'function') {
     throw new Error('cancel-ffmpeg must be called from the app window.');
   }
-  if (!runningProc) throw new Error('No FFmpeg run in progress.');
-  runCancelled = true;
+  if (!runningProc || !runningCancel) throw new Error('No FFmpeg run in progress.');
+  runningCancel();
   try {
     runningProc.kill();
   } catch (e) {
@@ -756,6 +861,7 @@ module.exports = {
   fixupSizeLimit,
   fixupConflicts,
   ensureOutputFile,
+  looksLikeFileToken,
   inferOutputExt,
   resolvePlaceholders,
   parseSizeLimit,
@@ -769,6 +875,10 @@ module.exports = {
   probeMedia,
   handleRunFfmpeg,
   handleCancelFfmpeg,
+  pathsReferToSameFile,
+  assertDistinctPaths,
+  withTrailingOutput,
+  coerceRunDestination,
   enforceOutputExtension,
   resolveModelPath,
   userDataModelsDir,

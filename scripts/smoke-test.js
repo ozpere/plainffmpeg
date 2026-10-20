@@ -888,6 +888,56 @@ async function main() {
   assert.strictEqual(e.changed, false);
   e = mainMod.enforceOutputExtension('/v/output', ['-i', 'in.mp4', 'out.mkv']);
   assert.strictEqual(e.path, '/v/output.mkv');
+  // runner destination coercion covers extensionless names too
+  assert.strictEqual(mainMod.coerceRunDestination('/v/output', '.mp4'), '/v/output.mp4');
+  assert.strictEqual(mainMod.coerceRunDestination('/v/output.mkv', '.mp4'), '/v/output.mp4');
+  assert.strictEqual(mainMod.coerceRunDestination('/v/output.mp4', '.mp4'), '/v/output.mp4');
+  // trailing output replacement never splits a flag/value pair
+  assert.deepStrictEqual(
+    mainMod.withTrailingOutput(['-i', 'in.mp4', 'out.mp4'], '/v/out.mkv'),
+    ['-i', 'in.mp4', '/v/out.mkv']
+  );
+  assert.deepStrictEqual(
+    mainMod.withTrailingOutput(['-i', 'in.mp4', '-map', '[v]'], '/v/out.mkv'),
+    ['-i', 'in.mp4', '-map', '[v]', '/v/out.mkv']
+  );
+  assert.deepStrictEqual(
+    mainMod.withTrailingOutput(['-i', 'in.mp4', '-metadata', 'title=out.mp4'], '/v/out.mkv'),
+    ['-i', 'in.mp4', '-metadata', 'title=out.mp4', '/v/out.mkv']
+  );
+  assert.deepStrictEqual(
+    mainMod.withTrailingOutput(['-i', 'in.mp4'], '/v/out.mkv'),
+    ['-i', 'in.mp4', '/v/out.mkv'],
+    'a trailing input path is not the output'
+  );
+  assert.deepStrictEqual(
+    mainMod.withTrailingOutput(['-i', 'in.mp4', '-an', 'out.mp4'], '/v/out.mkv'),
+    ['-i', 'in.mp4', '-an', '/v/out.mkv']
+  );
+  // symlink and hardlink aliases are the same file, and the runner refuses them
+  {
+    const aliasDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'pfm-alias-'));
+    const input = path.join(aliasDir, 'input.mp4');
+    const link = path.join(aliasDir, 'alias.mp4');
+    fs.writeFileSync(input, 'not a real video');
+    try { fs.symlinkSync(input, link); } catch { /* Windows may need privileges */ }
+    if (fs.existsSync(link)) {
+      assert.strictEqual(mainMod.pathsReferToSameFile(input, link), true, 'symlink alias detected');
+      assert.throws(() => mainMod.assertDistinctPaths(input, link), /same file/);
+      const fakeSender = { send() {} };
+      await assert.rejects(
+        mainMod.handleRunFfmpeg({ sender: fakeSender }, {
+          args: ['-y', '-i', input, link],
+          inputFile: input,
+          outputFile: link,
+        }),
+        /same file/,
+        'runner must refuse to overwrite a symlink alias'
+      );
+    }
+    assert.throws(() => mainMod.assertDistinctPaths(input, input), /same file/);
+    fs.rmSync(aliasDir, { recursive: true, force: true });
+  }
   console.log('[smoke] output extension enforcement OK');
   // packaged apps run ffmpeg from beside the asar (spawn cannot use asar paths)
   assert.ok(mainSrc.includes("replace('app.asar', 'app.asar.unpacked')"), 'ffmpeg path must be unpacked for spawn');
@@ -1019,10 +1069,12 @@ async function main() {
   assert.ok(preload.includes('getDroppedPath'), 'preload must expose the drop-path relay');
   assert.ok(renderer.includes('getDroppedPath'), 'drop must try the native path first');
   assert.ok(renderer.includes('drop resolved via native path'), 'native resolutions must be logged');
+  assert.ok(renderer.includes('getDroppedPath(firstFile)'), 'native relay must use the captured File');
   assert.ok(
-    renderer.indexOf('getDroppedPath(files[0])') < renderer.indexOf('pathsFromUriList(e.dataTransfer)'),
-    'native path must precede uri-list and bytes fallbacks'
+    renderer.indexOf('pathsFromUriList(e.dataTransfer)') < renderer.indexOf('getDroppedPath(firstFile)'),
+    'DataTransfer flavors must be captured before the native-path await'
   );
+  assert.ok(renderer.includes('await importPathlessDrop(firstFile)'), 'pathless byte imports must be awaited');
   // environment and input failures get plain-language hints, not bare exit codes
   assert.strictEqual(typeof mainMod.ffmpegFailureHint, 'function');
   const oomHint = mainMod.ffmpegFailureHint('x264 [error]: malloc of size 44008576 failed\nCannot allocate memory');
@@ -1620,6 +1672,20 @@ async function main() {
   assert.ok(renderer.includes('ffmpegRunning ? false'), 'Stop must stay clickable mid-run');
   assert.ok(renderer.includes('p.cancelled'), 'cancel progress must mark Cancelled, never Failed');
   assert.ok(renderer.includes('inputFile !== translateFile'), 'late results for an old video must be discarded');
+  assert.ok(
+    renderer.includes('instruction.value.trim() !== translateText'),
+    'late results for an edited instruction must be discarded'
+  );
+  assert.ok(renderer.includes('runStarting = true'), 'Run must lock before the overwrite await');
+  assert.ok(
+    renderer.indexOf('runStarting = true') < renderer.indexOf('window.api.outputExists(out)'),
+    'Run lock must precede the overwrite check'
+  );
+  assert.ok(renderer.includes('p.runId !== activeRunId'), 'progress events from old runs must be ignored');
+  assert.ok(renderer.includes('probeId !== probeSeq'), 'stale probes must not clear the current probe state');
+  assert.ok(renderer.includes('Stop FFmpeg before loading a different video'), 'file switches are locked during a run');
+  assert.ok(renderer.includes('cmdUserEdited'), 'failed translations must not clear a user-typed command');
+  assert.ok(renderer.includes('sameLoosePath'), 'renderer must reject input/output aliases before prompting');
   assert.ok(renderer.includes('cancelFfmpeg'), 'morphed button must still reach cancel');
   console.log('[smoke] button order OK');
 
