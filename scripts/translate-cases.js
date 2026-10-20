@@ -379,6 +379,61 @@ const TRANSLATE_CASES = [
     modelRaw: '-i {input} {output}',
     expectedArgs: ['-i', '{input}', '-vf', 'setpts=4*PTS', '-af', 'atempo=0.5,atempo=0.5', '{output}'],
   },
+  {
+    name: 'bare output filename is replaced, not duplicated',
+    instruction: 'convert to mp4',
+    modelRaw: '-i {input} out',
+    expectedArgs: ['-i', '{input}', '{output}'],
+  },
+  {
+    name: 'fifty percent faster is 1.5x playback',
+    instruction: 'make it 50% faster',
+    duration: 30,
+    modelRaw: '-i {input} {output}',
+    expectedArgs: ['-i', '{input}', '-vf', 'setpts=PTS/1.5', '-af', 'atempo=1.5', '{output}'],
+  },
+  {
+    name: 'slow motion below 1x is a direct playback factor',
+    instruction: 'slow motion 0.5x',
+    duration: 30,
+    modelRaw: '-i {input} {output}',
+    expectedArgs: ['-i', '{input}', '-vf', 'setpts=2*PTS', '-af', 'atempo=0.5', '{output}'],
+  },
+  {
+    name: 'trim to the last N keeps the tail',
+    instruction: 'trim to the last 5 seconds',
+    duration: 30,
+    modelRaw: '-i {input} {output}',
+    expectedArgs: ['-i', '{input}', '-ss', '25', '{output}'],
+  },
+  {
+    name: 'keep everything but the last N removes the tail',
+    instruction: 'keep everything but the last 5 seconds',
+    duration: 30,
+    modelRaw: '-i {input} {output}',
+    expectedArgs: ['-i', '{input}', '-t', '25', '{output}'],
+  },
+  {
+    name: 'unrelated keep does not turn a tail removal into a tail keep',
+    instruction: 'keep the audio and remove the last 5 seconds',
+    duration: 30,
+    modelRaw: '-i {input} {output}',
+    expectedArgs: ['-i', '{input}', '-t', '25', '{output}'],
+  },
+  {
+    name: 'speed up to a percent is a direct factor',
+    instruction: 'speed up to 150%',
+    duration: 30,
+    modelRaw: '-i {input} {output}',
+    expectedArgs: ['-i', '{input}', '-vf', 'setpts=PTS/1.5', '-af', 'atempo=1.5', '{output}'],
+  },
+  {
+    name: 'counterclockwise rotation after the angle is honored',
+    instruction: 'rotate 90 degrees counterclockwise',
+    duration: 30,
+    modelRaw: '-i {input} {output}',
+    expectedArgs: ['-i', '{input}', '-vf', 'transpose=2', '{output}'],
+  },
 ];
 
 module.exports = { TRANSLATE_CASES };

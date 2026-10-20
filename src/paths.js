@@ -45,7 +45,7 @@ function resolveModelPath() {
     // existence; only a new download needs a writable home.
     const exeModels = path.join(process.env.PORTABLE_EXECUTABLE_DIR, 'PlainFFmpegData', 'models');
     dirs.push(exeModels);
-    const appData = appDataModelsDir();
+    const appData = portableAppDataModelsDir();
     if (appData && !dirs.includes(appData)) dirs.push(appData);
   } else {
     // Preferred write target first, then every dir an existing download
@@ -94,6 +94,17 @@ function appDataModelsDir() {
   return null;
 }
 
+// Portable fallback lives in a sibling app-data folder, not the installed
+// app's %APPDATA%\PlainFFmpeg directory - the uninstaller removes that one.
+function portableAppDataModelsDir(modelsDir = appDataModelsDir()) {
+  if (!modelsDir) return null;
+  try {
+    // <app-data>/PlainFFmpeg/models -> <app-data>/PlainFFmpegPortable/models
+    return path.join(path.dirname(path.dirname(modelsDir)), 'PlainFFmpegPortable', 'models');
+  } catch { /* ignore */ }
+  return null;
+}
+
 // True for portable-launcher runs (electron-builder sets this env var).
 function isPortableLaunch() {
   return !!process.env.PORTABLE_EXECUTABLE_DIR;
@@ -103,7 +114,7 @@ function isPortableLaunch() {
 // Drives the persistent fallback notice in the UI.
 function portableFallbackActive() {
   if (!isPortableLaunch()) return false;
-  const appData = appDataModelsDir();
+  const appData = portableAppDataModelsDir();
   if (!appData) return false;
   return resolveModelPath().startsWith(appData + path.sep);
 }
@@ -213,6 +224,7 @@ module.exports = {
   resolveModelPath,
   userDataModelsDir,
   appDataModelsDir,
+  portableAppDataModelsDir,
   isPortableLaunch,
   portableFallbackActive,
   portableDataDir,

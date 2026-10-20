@@ -149,11 +149,11 @@ const verify = spawnSync(
   { shell: false, stdio: 'inherit', cwd: ROOT, env }
 );
 if (verify.status !== 0) {
-  warn(
-    'native binary did not load (often a missing MSVC runtime). ' +
+  console.error(
+    '[install:win] native binary did not load (often a missing MSVC runtime). ' +
       'Install https://aka.ms/vs/17/release/vc_redist.x64.exe and re-run. ' +
-      'Video loading, probing, and FFmpeg runs still work; translations will report a clear error until the binary loads.'
+      'Video loading, probing, and FFmpeg runs work, but translations cannot.'
   );
-} else {
-  log('done. Next: run "npm start" (first launch downloads the model if missing), or "npm run download-model" now.');
+  process.exit(1);
 }
+log('done. Next: run "npm start" (first launch downloads the model if missing), or "npm run download-model" now.');

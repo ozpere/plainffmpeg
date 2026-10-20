@@ -110,6 +110,11 @@ async function main() {
   eo = mainMod.ensureOutputFile(['-i', '{input}', 'out.mkv'], 'convert to mkv');
   assert.deepStrictEqual(eo.args, ['-i', '{input}', '{output}'], 'real outputs become the token');
   assert.strictEqual(eo.corrections.length, 1);
+  // a bare filename is still an output, unlike a codec/container value
+  eo = mainMod.ensureOutputFile(['-i', '{input}', 'out'], 'convert to mp4');
+  assert.deepStrictEqual(eo.args, ['-i', '{input}', '{output}'], 'bare outputs must not leave a second file');
+  eo = mainMod.ensureOutputFile(['-i', '{input}', '-f', 'mp4'], 'convert to mp4');
+  assert.deepStrictEqual(eo.args, ['-i', '{input}', '-f', 'mp4', '{output}'], 'flag values must stay values');
   // truncated answer ending on a valued flag: the flag is dropped so the
   // appended token is not swallowed as its value
   eo = mainMod.ensureOutputFile(['-i', '{input}', '-c:v', 'libx264', '-movflags'], 'convert to mp4');
@@ -370,8 +375,17 @@ async function main() {
   assert.deepStrictEqual(mainMod.parseTrimIntent('remove the middle 2 seconds'), { kind: 'middle-remove', n: 2, raw: '2' });
   assert.deepStrictEqual(mainMod.parseTrimIntent('keep the last 5 seconds without audio'), { kind: 'last-keep', n: 5, raw: '5' });
   assert.deepStrictEqual(mainMod.parseTrimIntent('keep everything except the last 5 seconds'), { kind: 'last-remove', n: 5, raw: '5' });
+  assert.deepStrictEqual(mainMod.parseTrimIntent('keep everything but the last 5 seconds'), { kind: 'last-remove', n: 5, raw: '5' });
+  assert.deepStrictEqual(mainMod.parseTrimIntent('keep the audio and remove the last 5 seconds'), { kind: 'last-remove', n: 5, raw: '5' });
+  assert.deepStrictEqual(mainMod.parseTrimIntent('trim to the last 5 seconds'), { kind: 'last-keep', n: 5, raw: '5' });
+  assert.deepStrictEqual(mainMod.parseTrimIntent('cut the middle 2 seconds'), { kind: 'middle-remove', n: 2, raw: '2' });
+  assert.deepStrictEqual(mainMod.parseTrimIntent('keep the audio and remove the middle 2 seconds'), { kind: 'middle-remove', n: 2, raw: '2' });
+  assert.deepStrictEqual(mainMod.parseTrimIntent('trim to the middle 5 seconds'), { kind: 'middle', n: 5, raw: '5' });
   assert.deepStrictEqual(mainMod.parseTrimIntent('trim it to the first 5 seconds'), { kind: 'first-keep', n: 5, raw: '5' });
   assert.deepStrictEqual(mainMod.parseTrimIntent('keep everything except the first 5 seconds'), { kind: 'first-remove', n: 5, raw: '5' });
+  assert.deepStrictEqual(mainMod.parseTrimIntent('keep all but the first 5 seconds'), { kind: 'first-remove', n: 5, raw: '5' });
+  assert.deepStrictEqual(mainMod.parseTrimIntent('keep the audio and remove the first 5 seconds'), { kind: 'first-remove', n: 5, raw: '5' });
+  assert.deepStrictEqual(mainMod.parseTrimIntent('skip the first 5 seconds'), { kind: 'first-remove', n: 5, raw: '5' });
   assert.deepStrictEqual(mainMod.parseTrimIntent('convert from 24 to 30 fps'), { kind: 'none', n: 0, raw: '' });
   assert.deepStrictEqual(mainMod.parseTrimIntent('keep it under 5 to 10 Mbps'), { kind: 'none', n: 0, raw: '' });
   assert.deepStrictEqual(mainMod.parseTrimIntent('convert to mp4'), { kind: 'none', n: 0, raw: '' });
@@ -440,6 +454,20 @@ async function main() {
   assert.strictEqual(mainMod.parseSpeedFactor('slow down by 2x'), 0.5);
   assert.strictEqual(mainMod.parseSpeedFactor('slow down to 0.25x'), 0.25);
   assert.strictEqual(mainMod.parseSpeedFactor('50% speed'), 0.5);
+  assert.strictEqual(mainMod.parseSpeedFactor('50% faster'), 1.5);
+  assert.strictEqual(mainMod.parseSpeedFactor('speed up by 50%'), 1.5);
+  assert.strictEqual(mainMod.parseSpeedFactor('slow down by 25%'), 0.75);
+  assert.strictEqual(mainMod.parseSpeedFactor('decrease speed by 25%'), 0.75);
+  assert.strictEqual(mainMod.parseSpeedFactor('slower by 20%'), 0.8);
+  assert.strictEqual(mainMod.parseSpeedFactor('speed at 150%'), 1.5);
+  assert.strictEqual(mainMod.parseSpeedFactor('speed up to 150%'), 1.5);
+  assert.strictEqual(mainMod.parseSpeedFactor('slow down to 25% speed'), 0.25);
+  assert.strictEqual(mainMod.parseSpeedFactor('50% of normal speed'), 0.5);
+  assert.strictEqual(mainMod.parseSpeedFactor('slow motion 0.5x'), 0.5);
+  assert.strictEqual(mainMod.parseSpeedFactor('0.5x slower'), 0.5);
+  assert.strictEqual(mainMod.parseSpeedFactor('half the speed'), 0.5);
+  assert.strictEqual(mainMod.parseSpeedFactor('twice as fast'), 2);
+  assert.strictEqual(mainMod.parseSpeedFactor('quarter speed'), 0.25);
   assert.strictEqual(mainMod.parseSpeedFactor('convert to mp4'), null);
   assert.strictEqual(fixupsMod.atempoChain(4), 'atempo=2,atempo=2');
   assert.strictEqual(fixupsMod.atempoChain(0.25), 'atempo=0.5,atempo=0.5');
@@ -485,6 +513,13 @@ async function main() {
   assert.strictEqual(mainMod.parseRotate('rotate 180'), 'transpose=2,transpose=2');
   assert.strictEqual(mainMod.parseRotate('rotate it 180'), 'transpose=2,transpose=2');
   assert.strictEqual(mainMod.parseRotate('rotate the video 90'), 'transpose=1');
+  assert.strictEqual(mainMod.parseRotate('rotate counterclockwise 270'), 'transpose=1');
+  assert.strictEqual(mainMod.parseRotate('rotate video 90'), 'transpose=1');
+  assert.strictEqual(mainMod.parseRotate('rotate 90 degrees counterclockwise'), 'transpose=2');
+  assert.strictEqual(mainMod.parseRotate('rotate by 90.'), 'transpose=1');
+  assert.strictEqual(mainMod.parseRotate('rotate 45 degrees'), null);
+  assert.strictEqual(mainMod.parseRotate('rotate 90.5 degrees'), null);
+  assert.strictEqual(mainMod.parseRotate('rotate 360'), null);
   assert.strictEqual(mainMod.parseRotate('flip horizontal'), 'hflip');
   assert.strictEqual(mainMod.parseRotate('convert to mp4'), null);
   let rt = mainMod.fixupRotate(['-i', 'in.mp4', '-vf', 'scale=-2:720', 'out.mp4'], 'rotate 90 degrees');
@@ -551,6 +586,7 @@ async function main() {
   assert.strictEqual(mainMod.parseThumbTime('thumbnail at the 10 second mark', 60), '10');
   assert.strictEqual(mainMod.parseThumbTime('thumbnail 10 seconds in', 60), '10');
   assert.strictEqual(mainMod.parseThumbTime('thumbnail at 25%', 60), '15');
+  assert.strictEqual(mainMod.parseThumbTime('thumbnail at 10 seconds with 50% volume', 60), '10');
   assert.strictEqual(mainMod.parseThumbTime('thumbnail 10s', 60), '10');
   assert.strictEqual(mainMod.parseThumbTime('thumbnail', 60), '30', 'bare thumbnail uses the middle');
   let   th = mainMod.fixupThumbnail(['-i', 'in.mp4', '-c:v', 'libx264', '{output}'], 'thumbnail at 10 seconds', 60);
@@ -697,6 +733,8 @@ async function main() {
   assert.ok(!sz.args.includes('-b:v') && sz.args.includes('-b:a'), 'audio-only cap uses -b:a');
   sz = mainMod.fixupSizeLimit(['-i', 'in.mp4', '-vn', '-c', 'copy', 'out.mp3'], 'below 5MB', 60);
   assert.ok(!sz.args.includes('-c') && !sz.args.includes('copy') && sz.args.includes('libmp3lame'), 'copied audio-only must re-encode');
+  sz = mainMod.fixupSizeLimit(['-i', 'in.mp4', '-vn', '-c:a', 'copy', 'out.mp3'], 'below 5MB', 60);
+  assert.ok(!sz.args.includes('-b:v') && sz.args.includes('libmp3lame') && sz.args.includes('-b:a'), 'copied audio-only must cap audio, never add video flags');
   // oversized -b:a is capped so the limit stays a guarantee
   sz = mainMod.fixupSizeLimit(['-i', 'in.mp4', '-c:v', 'libx264', '-b:a', '320k', 'out.mp4'], 'below 50MB', 60);
   assert.ok(sz.args.includes('128k') && !sz.args.includes('320k'), 'audio bitrate must be bounded under a size limit');
@@ -914,6 +952,16 @@ async function main() {
     mainMod.withTrailingOutput(['-i', 'in.mp4', '-an', 'out.mp4'], '/v/out.mkv'),
     ['-i', 'in.mp4', '-an', '/v/out.mkv']
   );
+  assert.deepStrictEqual(
+    mainMod.withTrailingOutput(['-i', 'in.mp4', 'out'], '/v/out.mkv'),
+    ['-i', 'in.mp4', '/v/out.mkv'],
+    'a bare trailing filename is the output'
+  );
+  assert.deepStrictEqual(
+    mainMod.withTrailingOutput(['-i', 'in.mp4', '-c:v', 'libx264'], '/v/out.mkv'),
+    ['-i', 'in.mp4', '-c:v', 'libx264', '/v/out.mkv'],
+    'a codec value is not the output'
+  );
   // symlink and hardlink aliases are the same file, and the runner refuses them
   {
     const aliasDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'pfm-alias-'));
@@ -1060,6 +1108,8 @@ async function main() {
   }
   assert.ok(renderer.includes('confirmOverwriteUI'), 'renderer must ask via in-app modal');
   assert.ok(renderer.includes('already exists in that directory'), 'overwrite prompt must name file and directory');
+  assert.ok(renderer.includes('refusing to overwrite blindly'), 'an unreadable overwrite check must stop the run');
+  assert.ok(!renderer.includes('overwrite check unavailable, continuing'), 'never run past a failed overwrite check');
   assert.ok(html.includes('id="confirmOverlay"'), 'UI must have the confirm modal');
   assert.ok(renderer.includes('diagnoseDrop'), 'drop must log flavor diagnostics');
   assert.ok(renderer.includes('arrayBuffer'), 'pathless drops must import bytes');
@@ -1106,6 +1156,8 @@ async function main() {
   assert.ok(renderer.includes('Still reading the video file'), 'probe in flight must block time requests');
   assert.ok(renderer.includes('duration is unknown'), 'unknown duration must block time requests');
   assert.ok(renderer.includes('middle'), 'the duration gate must cover middle-N requests');
+  assert.ok(renderer.includes('needsDuration') && renderer.includes('thumbnails?'),
+    'the duration gate must also cover thumbnail percentages');
   // gate parity: every trim kind that needs a duration must appear in the gate
   for (const word of ['last', 'middle']) {
     assert.ok(renderer.includes(word), `duration gate must cover ${word}-N requests`);
@@ -1291,6 +1343,7 @@ async function main() {
   assert.ok(!nsh.includes('plainffmpeg-updater'), 'stale updater path must be gone');
   // redist failures must warn, never pass silently: only 0/1638/3010 are success.
   assert.ok(nsh.includes('1638') && nsh.includes('3010'), 'installer must allowlist the benign redist exit codes');
+  assert.ok(nsh.includes('plainffmpegVcRedistReboot') && nsh.includes('Restart Windows'), '3010 must tell the user to reboot');
   assert.ok(nsh.includes('MessageBox'), 'redist failure must warn instead of going green');
   assert.ok(nsh.includes('1223'), 'declined admin prompt must get its own guidance');
   // install helper must survive locked dirs and check the full CRT set.
@@ -1298,6 +1351,30 @@ async function main() {
   assert.ok(installWin.includes('could not remove node_modules'), '--clean must report locked dirs instead of crashing');
   assert.ok(installWin.includes('vcruntime140_1.dll'), 'MSVC check must cover vcruntime140_1.dll');
   assert.ok(installWin.includes("SKIP_MODEL_DOWNLOAD: process.env.SKIP_MODEL_DOWNLOAD ?? '1'"), 'install must defer the model fetch by default');
+  assert.ok(installWin.includes('native binary did not load') && installWin.includes('process.exit(1)'), 'install must fail when the native binary cannot load');
+  // portable fallback uses a distinct app-data folder, so the uninstaller's
+  // %APPDATA%\PlainFFmpeg cleanup never deletes a portable model.
+  const pathsFileSrc = fs.readFileSync(path.join(__dirname, '../src/paths.js'), 'utf8');
+  assert.ok(pathsFileSrc.includes('PlainFFmpegPortable'), 'portable fallback must use a separate app-data folder');
+  assert.ok(mainSrc.includes('portableAppDataModelsDir()'), 'downloads must target the portable fallback folder');
+  const fakeAppDataModels = path.join(os.tmpdir(), 'pfm-appdata', 'PlainFFmpeg', 'models');
+  const portableFallback = mainMod.portableAppDataModelsDir(fakeAppDataModels);
+  assert.strictEqual(
+    portableFallback,
+    path.join(os.tmpdir(), 'pfm-appdata', 'PlainFFmpegPortable', 'models'),
+    'portable fallback must sit beside, not inside, the uninstaller-managed folder'
+  );
+  assert.ok(
+    !portableFallback.startsWith(path.join(os.tmpdir(), 'pfm-appdata', 'PlainFFmpeg') + path.sep),
+    'uninstall cleanup must not reach the portable fallback'
+  );
+  // release uploads and publish gates are strict.
+  const releaseWorkflow = fs.readFileSync(path.join(__dirname, '../.github/workflows/release.yml'), 'utf8');
+  assert.strictEqual((releaseWorkflow.match(/if-no-files-found: error/g) || []).length, 4, 'every artifact upload must fail when empty');
+  assert.ok(
+    releaseWorkflow.includes("if: github.event_name == 'push' && github.ref_type == 'tag'"),
+    'manual tag-targeted dispatches must not publish a Release'
+  );
   assert.ok(renderer.includes('Local LLM path:'), 'resolved model path must be logged at boot');
   console.log('[smoke] packaging OK');
 
@@ -1323,11 +1400,13 @@ async function main() {
     });
     await new Promise((r) => srv.listen(0, '127.0.0.1', r));
     const dest = path.join(__dirname, 'smoke-model.tmp');
+    const url = `http://127.0.0.1:${srv.address().port}/model.gguf`;
     try {
       fs.writeFileSync(dest + '.part', PAYLOAD.slice(0, PAYLOAD.length / 2));
+      fs.writeFileSync(dest + '.source', url);
       const dl = require('../scripts/download-model.js');
       const seen = [];
-      const { bytes } = await dl.downloadTo(`http://127.0.0.1:${srv.address().port}/model.gguf`, dest, {
+      const { bytes } = await dl.downloadTo(url, dest, {
         onProgress: (p) => seen.push(p),
       });
       assert.strictEqual(bytes, PAYLOAD.length, 'resumed download must total the full payload');
@@ -1429,6 +1508,110 @@ async function main() {
         srv.close();
       }
     }
+    // 4. Partial with no provenance sidecar: restart instead of appending.
+    {
+      const PAYLOAD = Buffer.alloc(64 * 1024, 0xdd);
+      let sawRange = false;
+      const srv = http.createServer((req, res) => {
+        if (req.headers.range) sawRange = true;
+        res.writeHead(200, { 'Content-Length': PAYLOAD.length, 'Accept-Ranges': 'bytes' });
+        res.end(PAYLOAD);
+      });
+      await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+      const dest = path.join(__dirname, 'smoke-model-nosidecar.tmp');
+      try {
+        fs.writeFileSync(dest + '.part', Buffer.alloc(32 * 1024, 0xaa));
+        await dl.downloadTo(`http://127.0.0.1:${srv.address().port}/model.gguf`, dest, {});
+        assert.strictEqual(sawRange, false, 'a partial without a sidecar must not be resumed');
+        assert.deepStrictEqual(fs.readFileSync(dest), PAYLOAD, 'unproven bytes must not splice in');
+      } finally {
+        fs.rmSync(dest, { force: true });
+        fs.rmSync(dest + '.part', { force: true });
+        fs.rmSync(dest + '.source', { force: true });
+        srv.close();
+      }
+    }
+    // 5. 206 without Content-Range: restart once, then accept the full body.
+    {
+      const PAYLOAD = Buffer.alloc(64 * 1024, 0xcc);
+      let requests = 0;
+      const srv = http.createServer((req, res) => {
+        requests += 1;
+        if (req.headers.range) {
+          res.writeHead(206, { 'Content-Length': PAYLOAD.length });
+          res.end(PAYLOAD);
+        } else {
+          res.writeHead(200, { 'Content-Length': PAYLOAD.length, 'Accept-Ranges': 'bytes' });
+          res.end(PAYLOAD);
+        }
+      });
+      await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+      const url = `http://127.0.0.1:${srv.address().port}/model.gguf`;
+      const dest = path.join(__dirname, 'smoke-model-nocr.tmp');
+      try {
+        fs.writeFileSync(dest + '.part', PAYLOAD.slice(0, 1024));
+        fs.writeFileSync(dest + '.source', url);
+        await dl.downloadTo(url, dest, {});
+        assert.deepStrictEqual(fs.readFileSync(dest), PAYLOAD, 'missing Content-Range must restart');
+        assert.strictEqual(requests, 2, 'missing Content-Range restarts exactly once');
+      } finally {
+        fs.rmSync(dest, { force: true });
+        fs.rmSync(dest + '.part', { force: true });
+        fs.rmSync(dest + '.source', { force: true });
+        srv.close();
+      }
+    }
+    // 6. Persistent 416: fail after one range-free retry, never loop.
+    {
+      let requests = 0;
+      const srv = http.createServer((req, res) => {
+        requests += 1;
+        res.writeHead(416, { 'Content-Range': 'bytes */1' });
+        res.end('range not satisfiable');
+      });
+      await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+      const url = `http://127.0.0.1:${srv.address().port}/model.gguf`;
+      const dest = path.join(__dirname, 'smoke-model-416.tmp');
+      try {
+        fs.writeFileSync(dest + '.part', Buffer.alloc(1024, 0x11));
+        fs.writeFileSync(dest + '.source', url);
+        await assert.rejects(dl.downloadTo(url, dest, {}), /416|range/i, 'persistent 416 must fail');
+        assert.strictEqual(requests, 2, '416 may restart only once');
+        assert.strictEqual(fs.existsSync(dest), false, '416 must not stage anything');
+      } finally {
+        fs.rmSync(dest, { force: true });
+        fs.rmSync(dest + '.part', { force: true });
+        fs.rmSync(dest + '.source', { force: true });
+        srv.close();
+      }
+    }
+    // 7. Minimum-size gate: a short body never stages and leaves no partial.
+    {
+      const body = Buffer.concat([Buffer.from('GGUF'), Buffer.alloc(1024, 0x07)]);
+      const srv = http.createServer((req, res) => {
+        res.writeHead(200, { 'Content-Length': body.length });
+        res.end(body);
+      });
+      await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+      const dest = path.join(__dirname, 'smoke-model-min.tmp');
+      try {
+        await assert.rejects(
+          dl.downloadTo(`http://127.0.0.1:${srv.address().port}/model.gguf`, dest, {
+            expectMagic: 'GGUF',
+            minBytes: body.length + 1,
+          }),
+          /smaller than expected/,
+          'undersized model must not stage'
+        );
+        assert.strictEqual(fs.existsSync(dest), false, 'undersized model must not stage');
+        assert.strictEqual(fs.existsSync(dest + '.part'), false, 'undersized partial must be removed');
+      } finally {
+        fs.rmSync(dest, { force: true });
+        fs.rmSync(dest + '.part', { force: true });
+        fs.rmSync(dest + '.source', { force: true });
+        srv.close();
+      }
+    }
     console.log('[smoke] resume integrity OK');
   }
   // format gates: wrong bytes must never stage as model or installer payload.
@@ -1483,16 +1666,22 @@ async function main() {
     {
       assert.strictEqual(typeof vc.assertPlausibleExe, 'function');
       const bad = path.join(__dirname, 'smoke-vc-bad.tmp');
+      const mzOnly = path.join(__dirname, 'smoke-vc-mz.tmp');
       const good = path.join(__dirname, 'smoke-vc-good.tmp');
       try {
         fs.writeFileSync(bad, '<html>not an exe</html>');
         assert.throws(() => vc.assertPlausibleExe(bad), /implausible/, 'HTML must not pass as an exe');
         const big = Buffer.alloc(10 * 1024 * 1024 + 16, 0);
         big[0] = 0x4d; big[1] = 0x5a;
+        big.writeUInt32LE(0x40, 0x3c);
+        fs.writeFileSync(mzOnly, big);
+        assert.throws(() => vc.assertPlausibleExe(mzOnly), /implausible/, 'MZ without PE must not pass');
+        big.write('PE\u0000\u0000', 0x40, 'latin1');
         fs.writeFileSync(good, big);
-        assert.doesNotThrow(() => vc.assertPlausibleExe(good), 'sized MZ file must pass');
+        assert.doesNotThrow(() => vc.assertPlausibleExe(good), 'sized MZ+PE file must pass');
       } finally {
         fs.rmSync(bad, { force: true });
+        fs.rmSync(mzOnly, { force: true });
         fs.rmSync(good, { force: true });
       }
     }
@@ -1518,7 +1707,9 @@ async function main() {
       assert.strictEqual(fs.existsSync(badModel), false, 'corrupt model must be removed for re-download');
       const good = Buffer.concat([Buffer.from('GGUF'), Buffer.alloc(2048, 0x07)]);
       fs.writeFileSync(badModel, good);
-      assert.strictEqual(dl.takeUsableModel([badModel]), badModel, 'good model must count as present');
+      assert.strictEqual(dl.takeUsableModel([badModel], 1024), badModel, 'good model must count as present');
+      assert.strictEqual(dl.takeUsableModel([badModel]), null, 'undersized model must not count as present');
+      assert.strictEqual(fs.existsSync(badModel), false, 'undersized model must be removed for re-download');
     } finally {
       fs.rmSync(mdir, { recursive: true, force: true });
     }
@@ -1532,6 +1723,8 @@ async function main() {
       assert.strictEqual(fs.existsSync(stale), false, 'stale redist must be removed for re-fetch');
       const big = Buffer.alloc(10 * 1024 * 1024 + 16, 0);
       big[0] = 0x4d; big[1] = 0x5a;
+      big.writeUInt32LE(0x40, 0x3c);
+      big.write('PE\u0000\u0000', 0x40, 'latin1');
       fs.writeFileSync(stale, big);
       assert.strictEqual(vc.existingRedistUsable(stale), true, 'sized MZ redist must count as present');
     } finally {
@@ -1548,9 +1741,16 @@ async function main() {
     // hung connections must abort so callers retry and resume instead of hanging forever.
     assert.ok(dlSrc.includes('AbortController'), 'model download must watch for stalls');
     assert.ok(dlSrc.includes('empty response body'), 'model download must reject bodyless responses');
+    assert.ok(dlSrc.includes('Content-Range'), 'model download must validate resume offsets');
+    assert.ok(dlSrc.includes('minBytes'), 'model download must reject undersized staged files');
+    assert.ok(dlSrc.includes("Accept-Encoding': 'identity'"), 'model download must request exact bytes');
+    assert.ok(dlSrc.includes('source sidecar'), 'model download must require provenance for resume');
     const vcSrc = fs.readFileSync(path.join(__dirname, 'fetch-vc-redist.js'), 'utf8');
     assert.ok(vcSrc.includes('attempt <= 3'), 'redist fetch must retry transient failures');
     assert.ok(vcSrc.includes('AbortController'), 'redist fetch must time out');
+    assert.ok(vcSrc.includes('PE\\u0000\\u0000') || vcSrc.includes("PE\\0\\0"), 'redist must verify the PE signature');
+    assert.ok(vcSrc.includes("content-length')") && vcSrc.includes('incomplete redist download'), 'redist body length must be verified');
+    assert.ok(mainSrc.includes('minBytes: downloader.MIN_BYTES'), 'in-app model fetch must enforce the minimum size');
   }
   const css = fs.readFileSync(path.join(__dirname, '../src/renderer/styles.css'), 'utf8');
   assert.ok(css.includes('.model-dl[hidden]'), 'download card must honor hidden');

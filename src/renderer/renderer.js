@@ -549,7 +549,9 @@
     }
     // Time and size requests are resolved against the probed duration - with
     // no duration the fixups skip silently and the command would be wrong.
-    if (/last\s+\d|middle\s+\d|below|under|\bmb\b|\bgb\b|size/i.test(text) && !(mediaDuration > 0)) {
+    const needsDuration = /last\s+\d|middle\s+\d|below|under|\bmb\b|\bgb\b|size/i.test(text)
+      || (/\b(?:thumbnails?|poster|screenshots?|still|cover|frames?)\b/i.test(text) && /\d+(?:\.\d+)?\s*%/.test(text));
+    if (needsDuration && !(mediaDuration > 0)) {
       if (probing) showBanner('Still reading the video file - wait a moment, then press Translate again.');
       else showBanner('The video duration is unknown, so time and size requests cannot be applied. See logs for details.');
       return null;
@@ -667,19 +669,27 @@
     translateOnlyBtn.disabled = true;
     refreshRunEnabled();
     try {
-      // Ask (in-app modal) before overwriting an existing file.
-      try {
-        if (out && await window.api.outputExists(out)) {
-          log(`output already exists: ${out}`);
-          const go = await confirmOverwriteUI(out);
-          if (!go) {
-            setStatus(ffmpegStatus, 'st-cancelled', 'Cancelled');
-            log('run cancelled - existing file kept.');
-            return;
-          }
+      // Ask (in-app modal) before overwriting an existing file. Never run
+      // blindly when the check itself fails.
+      let outputExists = false;
+      if (out) {
+        try {
+          outputExists = await window.api.outputExists(out);
+        } catch (e) {
+          setStatus(ffmpegStatus, 'st-failed', 'Failed');
+          showBanner('Could not check whether the output exists - refusing to overwrite blindly.');
+          log('overwrite check failed: ' + (e && e.message ? e.message : e));
+          return;
         }
-      } catch (e) {
-        log('overwrite check unavailable, continuing: ' + (e && e.message ? e.message : e));
+      }
+      if (outputExists) {
+        log(`output already exists: ${out}`);
+        const go = await confirmOverwriteUI(out);
+        if (!go) {
+          setStatus(ffmpegStatus, 'st-cancelled', 'Cancelled');
+          log('run cancelled - existing file kept.');
+          return;
+        }
       }
       if (inputFile !== runInput) return;
       runStarting = false;

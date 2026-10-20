@@ -59,6 +59,7 @@ const {
   resolveModelPath,
   userDataModelsDir,
   appDataModelsDir,
+  portableAppDataModelsDir,
   isPortableLaunch,
   portableFallbackActive,
   portableDataDir,
@@ -147,7 +148,7 @@ async function handleDownloadModel(event, payload) {
     const consent = !!(payload && payload.consent);
     let dest = resolveModelPath();
     if (isPortableLaunch() && portableDataDir() === null) {
-      const appData = appDataModelsDir();
+      const appData = portableAppDataModelsDir();
       const fallbackDest = appData ? path.join(appData, 'model.gguf') : dest;
       if (!consent) {
         return {
@@ -183,8 +184,14 @@ async function handleDownloadModel(event, payload) {
     for (const url of downloader.SOURCES) {
       try {
         emit({ state: 'downloading', url, done: 0, total: 0, pct: null });
-        const { bytes } = await downloader.downloadTo(url, dest, { onProgress, expectMagic: 'GGUF' });
+        const { bytes } = await downloader.downloadTo(url, dest, {
+          onProgress,
+          expectMagic: 'GGUF',
+          minBytes: downloader.MIN_BYTES,
+        });
         if (bytes < (downloader.MIN_BYTES || 0)) {
+          // Defensive: never leave an undersized staged model behind.
+          try { fs.rmSync(dest, { force: true }); } catch { /* ignore */ }
           throw new Error(`downloaded file smaller than expected (${bytes} bytes).`);
         }
         emit({ state: 'complete', done: bytes, total: bytes, pct: 100 });
@@ -392,6 +399,7 @@ async function handleTranslatePrompt({ instruction, duration, width, height }) {
   // No silent fallback: any LLM problem is returned as an error so the UI
   // can alert the user instead of running a guessed-up command.
   let rawOut = '';
+  let prompted = false;
   try {
     if (isLlamaLoading()) {
       notifyRenderer('LLM is still loading in the background - holding your translation until it is ready…');
@@ -404,6 +412,7 @@ async function handleTranslatePrompt({ instruction, duration, width, height }) {
       maxTokens: 256,
       temperature: 0.1,
     });
+    prompted = true;
     rawOut = String(raw || '');
     const cleaned = sanitizeModelOutput(raw);
     if (!cleaned) throw new Error('LLM returned empty output.');
@@ -460,7 +469,7 @@ async function handleTranslatePrompt({ instruction, duration, width, height }) {
       error: message,
       raw: rawOut || undefined,
       diag,
-      errorKind: 'load-failed',
+      errorKind: prompted ? 'translation' : 'load-failed',
     };
   }
   } finally {
@@ -515,10 +524,15 @@ async function handlePickOutput({ defaultPath, extension } = {}) {
 }
 
 function handleOutputExists(outputPath) {
+  if (!outputPath) return false;
+  const p = String(outputPath);
+  // A missing output is the normal first run. An unreadable existing path is
+  // not "missing" - fail the check so the renderer can refuse to overwrite.
+  if (!fs.existsSync(p)) return false;
   try {
-    return !!outputPath && fs.existsSync(outputPath) && fs.statSync(outputPath).isFile();
-  } catch {
-    return false;
+    return fs.statSync(p).isFile();
+  } catch (e) {
+    throw new Error('Could not inspect the output path: ' + (e && e.message ? e.message : e));
   }
 }
 
@@ -659,8 +673,8 @@ function withTrailingOutput(finalArgs, dest) {
     && !String(last).startsWith('-')
     && !String(last).startsWith('[')
     && !looksLikeRunValue(last)
-    && looksLikeFileToken(last)
-    && !(prev && VALUED_RUN_FLAGS.has(String(prev)));
+    && !(prev && VALUED_RUN_FLAGS.has(String(prev)))
+    && (looksLikeFileToken(last) || !prev || !String(prev).startsWith('-'));
   if (replaceable) finalArgs[finalArgs.length - 1] = dest;
   else finalArgs.push(dest);
   return finalArgs;
@@ -883,6 +897,7 @@ module.exports = {
   resolveModelPath,
   userDataModelsDir,
   appDataModelsDir,
+  portableAppDataModelsDir,
   portableDataDir,
   isPortableLaunch,
   portableFallbackActive,

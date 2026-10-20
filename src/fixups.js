@@ -81,7 +81,15 @@ function ensureOutputFile(args, instruction) {
   }
   if (out[out.length - 1] === '{output}') return { args: out, corrections };
   const last = out[out.length - 1];
-  if (looksLikeFileToken(last) && !looksLikeFlagValue(last)) {
+  const prev = out[out.length - 2];
+  // A bare trailing filename ("out") is still an output, but a value that
+  // belongs to the previous flag ("-c:v libx264", "-f mp4") is not.
+  const replaceable = last
+    && !String(last).startsWith('-')
+    && !looksLikeFlagValue(last)
+    && !(prev && valuedFlags.has(String(prev)))
+    && (looksLikeFileToken(last) || !prev || !String(prev).startsWith('-'));
+  if (replaceable) {
     out[out.length - 1] = '{output}';
     corrections.push(`Replaced "${last}" with {output} (paths are templated, never literal)`);
     return { args: out, corrections };
@@ -543,12 +551,7 @@ function fixupSizeLimit(args, instruction, durationSec) {
     corrections.push('Size limit: replaced `-c copy` with real encoders (copied streams cannot be capped)');
   }
   const caIdx = out.findIndex((t) => t === '-c:a');
-  if (!hasAN && caIdx !== -1 && String(out[caIdx + 1]).toLowerCase() === 'copy') {
-    out[caIdx + 1] = audioCodec;
-    out.splice(caIdx + 2, 0, '-b:a', '128k');
-    audioBits = 128000;
-    corrections.push(`Size limit: replaced \`-c:a copy\` with \`-c:a ${out[caIdx + 1]} -b:a 128k\` (copied audio has no size bound)`);
-  } else if (audioOnly) {
+  if (audioOnly) {
     if (hasAN) return { args: out, corrections };
     // No video stream to budget: cap the audio itself. A bare -c copy also
     // copies audio, so it must become a real encoder before -b:a means anything.
@@ -559,7 +562,10 @@ function fixupSizeLimit(args, instruction, durationSec) {
       corrections.push(`Size limit: replaced \`-c copy\` with \`-c:a ${audioCodec}\` (copied audio has no size bound)`);
     }
     const caNow = out.findIndex((t) => t === '-c:a');
-    if (caNow !== -1 && String(out[caNow + 1]).toLowerCase() === 'copy') out[caNow + 1] = audioCodec;
+    if (caNow !== -1 && String(out[caNow + 1]).toLowerCase() === 'copy') {
+      out[caNow + 1] = audioCodec;
+      corrections.push(`Size limit: replaced \`-c:a copy\` with \`-c:a ${audioCodec}\` (copied audio has no size bound)`);
+    }
     const audioBps = Math.max(32000, Math.floor((bytes * 8 * 0.98) / effDuration));
     const ak = Math.floor(Math.min(128000, audioBps) / 1000);
     const baIdx = out.findIndex((t) => t === '-b:a');
@@ -567,6 +573,12 @@ function fixupSizeLimit(args, instruction, durationSec) {
     else insertBeforeOutput(out, '-b:a', `${ak}k`);
     corrections.push(`Size limit: capped audio-only output at -b:a ${ak}k`);
     return { args: out, corrections };
+  }
+  if (!hasAN && caIdx !== -1 && String(out[caIdx + 1]).toLowerCase() === 'copy') {
+    out[caIdx + 1] = audioCodec;
+    out.splice(caIdx + 2, 0, '-b:a', '128k');
+    audioBits = 128000;
+    corrections.push(`Size limit: replaced \`-c:a copy\` with \`-c:a ${out[caIdx + 1]} -b:a 128k\` (copied audio has no size bound)`);
   } else if (!hasAN) {
     const baIdx = out.findIndex((t) => t === '-b:a');
     if (baIdx !== -1) {
@@ -621,30 +633,34 @@ function parseTrimIntent(instruction) {
   const SEC = '\\s*s(?:ec(?:ond)?s?)?';
   const mid = num(new RegExp('middle\\s+(\\d+(?:\\.\\d+)?)' + SEC, 'i'));
   if (mid && mid.n > 0) {
-    // "Remove the middle N" is not a single contiguous window; the pipeline
-    // rejects it instead of silently keeping the middle.
-    const removeMid = /\b(?:remove|delete|cut\s+out|drop|strip)\b[^.]{0,30}\bmiddle\b/i.test(instr);
+    // "Remove/cut the middle N" is not a single contiguous window; the
+    // pipeline rejects it instead of silently keeping the middle.
+    const keepMid = /\b(?:keep|keeping|extract|only|just)\b[^.]{0,16}\bmiddle\b/i.test(instr)
+      || /\b(?:trim|cut|shorten)\b[^.]{0,40}\b(?:to|down\s+to|until)\s+(?:the\s+)?middle\b/i.test(instr);
+    const removeMid = !keepMid
+      && /\b(?:remove|delete|cut|drop|strip|trim|skip|omit|exclude)\b[^.]{0,30}\bmiddle\b/i.test(instr);
     return { kind: removeMid ? 'middle-remove' : 'middle', n: mid.n, raw: mid.raw };
   }
   const last = num(new RegExp('last\\s+(\\d+(?:\\.\\d+)?)' + SEC, 'i'));
   if (last && last.n > 0) {
     // Explicit keep-the-tail phrasing beats removal verbs. "Without audio"
     // describes the stream, not a cut, so it never implies removal.
-    const keepTail = /\b(?:keep|keeping|extract|only|just)\b[^.]{0,40}\blast\s+\d/i.test(instr);
-    const exceptLast = /\b(?:everything|all)\b[^.]{0,30}\b(?:except|but\s+not)\b[^.]{0,30}\blast\s+\d/i.test(instr);
+    const keepTail = /\b(?:keep|keeping|extract|only|just)\b[^.]{0,16}\blast\s+\d/i.test(instr)
+      || /\b(?:trim|cut|shorten)\b[^.]{0,40}\b(?:to|down\s+to|until)\s+(?:the\s+)?last\s+\d/i.test(instr);
+    const exceptLast = /\b(?:everything|all)\b[^.]{0,30}\b(?:except|but(?:\s+not)?)\b[^.]{0,30}\blast\s+\d/i.test(instr);
     const removal = exceptLast || (!keepTail
-      && /\b(?:remove|removing|delete|delet|trim|trimming|cut|cutting|drop|strip)\b/i.test(instr));
+      && /\b(?:remove|removing|delete|delet|trim|trimming|cut|cutting|drop|strip|skip|omit|exclude)\b/i.test(instr));
     return { kind: removal ? 'last-remove' : 'last-keep', n: last.n, raw: last.raw };
   }
   const first = num(new RegExp('\\bfirst\\s+(\\d+(?:\\.\\d+)?)' + SEC, 'i'));
   if (first && first.n > 0) {
     // "Trim it to the first N" keeps the head, while "remove the first N"
     // cuts it. "Keep everything except the first N" is a first-remove.
-    const keepHead = /\b(?:keep|keeping|extract|only|just)\b[^.]{0,40}\bfirst\s+\d/i.test(instr)
+    const keepHead = /\b(?:keep|keeping|extract|only|just)\b[^.]{0,16}\bfirst\s+\d/i.test(instr)
       || /\b(?:trim|cut|shorten)\b[^.]{0,40}\b(?:to|down\s+to|until)\s+(?:the\s+)?first\s+\d/i.test(instr);
-    const exceptFirst = /\b(?:everything|all)\b[^.]{0,30}\b(?:except|but\s+not)\b[^.]{0,30}\bfirst\s+\d/i.test(instr);
+    const exceptFirst = /\b(?:everything|all)\b[^.]{0,30}\b(?:except|but(?:\s+not)?)\b[^.]{0,30}\bfirst\s+\d/i.test(instr);
     const removal = exceptFirst || (!keepHead
-      && /\b(?:remove|removing|delete|delet|trim|trimming|cut|cutting|drop|strip)\b/i.test(instr));
+      && /\b(?:remove|removing|delete|delet|trim|trimming|cut|cutting|drop|strip|skip|omit|exclude)\b/i.test(instr));
     return { kind: removal ? 'first-remove' : 'first-keep', n: first.n, raw: first.raw };
   }
   // Range forms require a time unit, an explicit "seconds" word, or a
@@ -958,13 +974,34 @@ function fixupConflicts(args, instruction) {
 
 // Playback speed factor from the instruction. "2x slower" and "slow motion
 // 2x" mean half speed; "slow down to 0.25x" is a direct playback factor;
-// "slow down by 2x" is half speed. Bare "speed up" defaults to 2x and bare
-// "slow down" to 0.5x. Returns null when no speed intent is recognizable.
+// "slow down by 2x" is half speed. Percent forms name direction ("50%
+// faster" = 1.5x, "50% speed" = 0.5x). Bare "speed up" defaults to 2x and
+// bare "slow down" to 0.5x. Returns null when no speed intent is recognizable.
 function parseSpeedFactor(instruction) {
   const instr = String(instruction || '');
   const bounded = (x) => (Number.isFinite(x) && x > 0 && x <= 16 ? x : null);
-  let m = /(\d+(?:\.\d+)?)\s*(?:x|×|times?)\s*(?:slower|slow(?:er)?|slow[\s-]*motion|motion)/i.exec(instr);
-  if (m) return bounded(1 / parseFloat(m[1]));
+  // A playback factor below 1 is already slow; a "slower" factor above 1
+  // is a reduction (2x slower = 0.5x playback).
+  const slow = (n) => bounded(n >= 1 ? 1 / n : n);
+  // Percent forms name their direction: "50% faster" is 1.5x, while
+  // "50% speed" is 0.5x. Parse these before the generic word/number forms.
+  let m = /(\d+(?:\.\d+)?)\s*%\s*(faster|slower|quicker|slow(?:er)?)/i.exec(instr);
+  if (m) {
+    const p = parseFloat(m[1]) / 100;
+    return bounded(/slow/i.test(m[2]) ? 1 - p : 1 + p);
+  }
+  m = /(\d+(?:\.\d+)?)\s*%\s*(?:of\s+)?(?:the\s+)?(?:original\s+|normal\s+)?(?:speed|playback)/i.exec(instr);
+  if (m) return bounded(parseFloat(m[1]) / 100);
+  m = /\b(?:to|at)\s+(\d+(?:\.\d+)?)\s*%\s*(?:of\s+)?(?:the\s+)?(?:original\s+|normal\s+)?(?:speed|playback)?/i.exec(instr);
+  if (m && /\b(?:speed|slow|fast|play|motion)\b/i.test(instr)) return bounded(parseFloat(m[1]) / 100);
+  m = /\b(?:speed|playback)\b\s*(?:at|to|of)\s*(\d+(?:\.\d+)?)\s*%/i.exec(instr);
+  if (m) return bounded(parseFloat(m[1]) / 100);
+  m = /\b(?:speed(?:ing)?\s+(?:it\s+)?up|speed\s+up|faster|quicker|increase\s+(?:the\s+)?speed)\b[^.\d]{0,20}(\d+(?:\.\d+)?)\s*%/i.exec(instr);
+  if (m) return bounded(1 + parseFloat(m[1]) / 100);
+  m = /\b(?:slow(?:ing)?\s+(?:it\s+)?down|slow\s+down|slower|(?:reduce|decrease)\s+(?:the\s+)?speed)\b[^.\d]{0,20}(\d+(?:\.\d+)?)\s*%/i.exec(instr);
+  if (m) return bounded(1 - parseFloat(m[1]) / 100);
+  m = /(\d+(?:\.\d+)?)\s*(?:x|×|times?)\s*(?:slower|slow(?:er)?|slow[\s-]*motion|motion)/i.exec(instr);
+  if (m) return slow(parseFloat(m[1]));
   m = /(\d+(?:\.\d+)?)\s*(?:x|×|times?)\s*(?:faster|speed|quicker)/i.exec(instr);
   if (m) return bounded(parseFloat(m[1]));
   m = /\bto\s+(\d+(?:\.\d+)?)\s*(?:x|×|times?)\b/i.exec(instr);
@@ -973,18 +1010,17 @@ function parseSpeedFactor(instruction) {
   if (m) {
     const between = instr.slice(m.index, m.index + m[0].length);
     const x = parseFloat(m[1]);
-    return bounded(/\b(?:to|at)\b/i.test(between) ? x : 1 / x);
+    return bounded(/\b(?:to|at)\b/i.test(between) ? x : slow(x));
   }
   m = /\b(?:speed(?:ing)?\s+(?:it\s+)?up|speed\s+up|faster|fast[\s-]*forward)\b[^.\d]{0,20}(\d+(?:\.\d+)?)\s*(?:x|×|times?)?/i.exec(instr);
   if (m) return bounded(parseFloat(m[1]));
   m = /\bslow[\s-]*(?:motion|mo)\b[^.\d]{0,20}(\d+(?:\.\d+)?)\s*(?:x|×|times?)/i.exec(instr);
-  if (m) return bounded(1 / parseFloat(m[1]));
-  m = /(\d+(?:\.\d+)?)\s*%\s*(?:of\s+)?(?:the\s+)?(?:speed|playback|faster|slower)/i.exec(instr);
-  if (m) return bounded(parseFloat(m[1]) / 100);
+  if (m) return slow(parseFloat(m[1]));
   m = /(\d+(?:\.\d+)?)\s*(?:x|×|times?)\b/i.exec(instr);
   if (m) return bounded(parseFloat(m[1]));
-  if (/\bhalf\s+speed\b|\bslow\s+motion\b|\bslow[\s-]*mo\b|\bhalf[\s-]*speed\b/i.test(instr)) return 0.5;
-  if (/\bdouble\s+speed\b|\btime[\s-]*lapse\b/i.test(instr)) return 2;
+  if (/\bhalf\s+(?:the\s+)?speed\b|\bhalf\s+as\s+fast\b|\bslow\s+motion\b|\bslow[\s-]*mo\b/i.test(instr)) return 0.5;
+  if (/\bquarter\s+(?:the\s+)?speed\b/i.test(instr)) return 0.25;
+  if (/\bdouble\s+(?:the\s+)?speed\b|\btwice\s+as\s+fast\b|\btime[\s-]*lapse\b/i.test(instr)) return 2;
   if (/\bspeed\b[\w\s]{0,12}\bup\b|\bfaster\b/i.test(instr)) return 2;
   if (/\bslow\b[\w\s]{0,12}\bdown\b|\bslower\b/i.test(instr)) return 0.5;
   return null;
@@ -1140,7 +1176,7 @@ function fixupWidthScale(args, instruction) {
 // CCW) → transpose=2, 180 → transpose=2,transpose=2, flips → hflip/vflip.
 function parseRotate(instruction) {
   const instr = String(instruction || '');
-  const m = /rotat(?:e|ing)?(?:\s+(?:it|the\s+video|this|the\s+clip))?\s*(?:by\s*)?(90|180|270)(?:\s*(?:degrees?|°))?/i.exec(instr);
+  const m = /rotat(?:e|ed|ing|ion)?(?:\s+(?:it|video|the\s+video|this(?:\s+(?:video|clip))?|(?:the\s+)?clip))?(?:\s+(?:counter[\s-]?clockwise|anti[\s-]?clockwise|ccw|clockwise|cw))?\s*(?:by|to)?\s*(90|180|270)(?!\d|\.\d)(?:\s*(?:degrees?|°))?/i.exec(instr);
   const ccw = /counter|ccw|anti[\s-]?clockwise/i.test(instr);
   if (m) {
     const d = parseInt(m[1], 10);
@@ -1148,6 +1184,9 @@ function parseRotate(instruction) {
     if (d === 90) return ccw ? 'transpose=2' : 'transpose=1';
     return ccw ? 'transpose=1' : 'transpose=2';
   }
+  // An explicit non-right angle (45, 90.5, 360) is not a transpose edit.
+  // Refuse to turn it into the nearest right angle.
+  if (/rotat\w*[^.\d]{0,30}\d/i.test(instr)) return null;
   if (/\brotat/i.test(instr)) return ccw ? 'transpose=2' : 'transpose=1';
   if (/\bflip\s+horiz/i.test(instr)) return 'hflip';
   if (/\bflip\s+vert/i.test(instr)) return 'vflip';
@@ -1287,8 +1326,10 @@ function fixupGif(args, instruction) {
 // and bitrate. Time defaults to the middle with a known duration, else 0.
 function parseThumbTime(instruction, duration) {
   const instr = String(instruction || '');
-  // Percentages need the duration: "thumbnail at 50%".
-  const pct = /(\d+(?:\.\d+)?)\s*%/i.exec(instr);
+  // Percentages need the duration: "thumbnail at 50%". Tie the number to the
+  // still request so a later "50% volume" cannot become the timestamp.
+  const pct = /\b(?:thumbnails?|poster|screenshots?|still|cover|frames?)\b[^.]{0,16}?(\d+(?:\.\d+)?)\s*%/i.exec(instr)
+    || /\bat\s+(?:the\s+)?(\d+(?:\.\d+)?)\s*%/i.exec(instr);
   if (pct && duration > 0) {
     return fmtSec(duration * (parseFloat(pct[1]) / 100));
   }

@@ -15,7 +15,7 @@ How it works: a small built-in LLM turns your sentence into instructions for FFm
 ### Windows
 
 - **Setup - recommended!** (`PlainFFmpeg-Windows-Setup.exe`) - installs the app and everything it needs.
-- **Portable** (`PlainFFmpeg-Windows-Portable.exe`) - no install, runs from any folder or USB stick. It cannot install the Microsoft Visual C++ Redistributable (x64) that it needs, so on PCs that lack it, you need to install that first (the app informs you and gives you the link).
+- **Portable** (`PlainFFmpeg-Windows-Portable.exe`) - no install, runs from any folder or USB stick. It cannot install the Microsoft Visual C++ Redistributable (x64) that it needs, so on PCs that lack it, you need to install that first (the app informs you and gives you the link). If the portable folder is read-only, the app asks before keeping the downloaded model in `%APPDATA%\PlainFFmpegPortable` instead; deleting the portable folder does not remove that copy.
 
 SmartScreen may show a blue *"Windows protected your PC"* warning since the app is not code-signed yet - click **More info**, then **Run anyway**.
 
@@ -37,8 +37,9 @@ One instruction can do several things at once - paste any of these to see:
 
 - *"Convert to mp4, trim the last 5 seconds, and make it 720p"*
 - *"Keep only the middle 10 seconds and remove the sound"*
+- *"Keep everything but the first 5 seconds"*
 - *"Make a gif of the first 3 seconds"*
-- *"Convert to mkv and boost the volume to 150%"*
+- *"Convert to mkv, boost the volume to 150%, and play it 50% faster"*
 
 ### One thing to know first
 
@@ -50,6 +51,8 @@ The translations require downloading the local LLM (about 1.3 GB, once) - press 
 - **The app mentions a missing Microsoft Visual C++ Redistributable (x64)** (portable version) - install it from the link shown, restart the app, and try again.
 - **Your finished video has no sound** - check your instruction: words like *"mute"* (and gif, which has no sound at all) remove the audio on purpose.
 - **The result is not what you asked for** - be exact with seconds and name one container (*"trim the last 5 seconds"*, not *"tidy it up"*). Vague wishes do not map to anything concrete.
+- **The app refuses an instruction** - removing a middle window is not one continuous cut, and a custom filter graph may conflict with a simple filter request. Rephrase it as separate edits or edit the command box. Refusing is deliberate: the app never guesses a silently wrong edit.
+- **Input and output are the same file** - choose a different output path; the app refuses to overwrite your source.
 - **Your file will not load** - try a common format such as mp4, mkv, webm, mov, or avi.
 
 ## Technical details
@@ -79,11 +82,12 @@ npm start
 ```
 
 `install:win` runs the preflight checks, verifies the native binary loads
-with a CPU-only check (no GPU needed at install time), and skips the ~1.3 GB
-model fetch by default (fast, offline-friendly installs) - first launch
-downloads it in-app, or run `npm run download-model` anytime
-(`SKIP_MODEL_DOWNLOAD=0` fetches during install). Plain `npm install` still
-fetches via `postinstall`, skipped when offline. At runtime, translation uses
+with a CPU-only check (no GPU needed at install time), and fails the install
+if that binary cannot load; it skips the ~1.3 GB model fetch by default
+(fast, offline-friendly installs) - first launch downloads it in-app, or run
+`npm run download-model` anytime (`SKIP_MODEL_DOWNLOAD=0` fetches during
+install). Plain `npm install` still fetches via `postinstall`, skipped when
+offline. At runtime, translation uses
 the GPU automatically when the graphics driver provides it (Vulkan on
 Windows/Linux, Metal on Apple Silicon), and falls back to the CPU otherwise.
 The engine badge shows which backend is active.
@@ -91,7 +95,8 @@ The engine badge shows which backend is active.
 To build distributables: `npm run dist:win` produces the thin installer + portable
 exe into `dist/` (fetches the MSVC redist itself, installs it silently),
 `npm run dist:linux` the AppImage. Unsigned Windows builds trigger
-SmartScreen until code-signed.
+SmartScreen until code-signed. CI uploads build artifacts for manual runs but
+publishes a public Release only when a `v*` tag is pushed.
 
 ### Scripts
 
@@ -122,7 +127,8 @@ src/
     renderer.js        UI logic (load → probe → translate → run, model download, editable command box)
     styles.css         Warm-charcoal theme
 scripts/
-  download-model.js    GGUF fetcher (Hugging Face, resumable, format-checked)
+  download-model.js    GGUF fetcher (Hugging Face, provenance-checked resume,
+                       exact ranges, size + format gates)
   fetch-vc-redist.js   MSVC redist fetcher (build-time only, not committed)
   install-windows.js   Windows install helper (preflight, long paths, MSVC check)
   smoke-test.js        Headless verification suite
