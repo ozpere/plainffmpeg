@@ -13,6 +13,8 @@ const {
   tokenizeArgs,
   fixupArgs,
   fixupCodecs,
+  fixupContainerCodecs,
+  filterGraphConflict,
   fixupInput,
   fixupLastTrim,
   fixupMiddleTrim,
@@ -348,7 +350,14 @@ function handleModelStatus() {
   };
 }
 
+let translationInFlight = false;
+
 async function handleTranslatePrompt({ instruction, duration, width, height }) {
+  if (translationInFlight) {
+    return { ok: false, engine: 'node-llama-cpp', error: 'A translation is already in progress.', errorKind: 'busy' };
+  }
+  translationInFlight = true;
+  try {
   const durLine = duration && duration > 0 ? `Input duration: ${duration} seconds.\n` : '';
   const dimLine = (width > 0 && height > 0) ? `Source resolution: ${width}x${height}.\n` : '';
   // Exact numbers are pre-computed by the deterministic builders so the
@@ -366,6 +375,9 @@ async function handleTranslatePrompt({ instruction, duration, width, height }) {
       notifyRenderer('LLM is still loading in the background - holding your translation until it is ready…');
     }
     const session = await getLlamaSession();
+    // Translations are independent: a persistent chat session must not carry
+    // earlier instructions or answers into the next request.
+    try { session.resetChatHistory(); } catch { /* older session API */ }
     const raw = await session.prompt(userPrompt, {
       maxTokens: 256,
       temperature: 0.1,
@@ -377,7 +389,17 @@ async function handleTranslatePrompt({ instruction, duration, width, height }) {
     // Fixed order lives in runTranslationPipeline (fixups.js). The result
     // stays templated (`-i {input}`, trailing `{output}`) for display;
     // outputExt drives the output picker, the runner resolves both tokens.
-    const { args, corrections } = runTranslationPipeline(tokens, { instruction, duration });
+    const pipeline = runTranslationPipeline(tokens, { instruction, duration });
+    if (pipeline.error) {
+      return {
+        ok: false,
+        engine: 'node-llama-cpp',
+        error: pipeline.error,
+        raw,
+        errorKind: 'translation',
+      };
+    }
+    const { args, corrections } = pipeline;
     const outputExt = inferOutputExt(args, instruction);
     return {
       ok: true,
@@ -418,6 +440,9 @@ async function handleTranslatePrompt({ instruction, duration, width, height }) {
       diag,
       errorKind: 'load-failed',
     };
+  }
+  } finally {
+    translationInFlight = false;
   }
 }
 
@@ -706,6 +731,8 @@ module.exports = {
   tokenizeArgs,
   fixupArgs,
   fixupCodecs,
+  fixupContainerCodecs,
+  filterGraphConflict,
   fixupInput,
   fixupLastTrim,
   fixupMiddleTrim,

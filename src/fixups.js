@@ -30,8 +30,9 @@ function sanitizeModelOutput(raw) {
     (l) => /-[a-zA-Z]/.test(l) || /\{(input|output)\}/.test(l) || /\.(mp4|mkv|webm|mov|avi|gif|mp3|png|jpe?g)\b/i.test(l)
   );
   const joined = (kept.length > 0 ? kept : lines).join(' ');
-  // Drop a leading "ffmpeg" binary name - renderer prepends the binary path.
-  const s = joined.replace(/^ffmpeg\s+/, '').trim();
+  // Drop a leading shell prompt and/or "ffmpeg" binary name - the renderer
+  // prepends the binary path.
+  const s = joined.replace(/^(?:(?:\$|>)\s*)?ffmpeg(?:\.exe)?\s+/i, '').trim();
   // Completeness gate: must name an input. A missing trailing output file
   // is recovered downstream (ensureOutputFile); pure prose fails here.
   const toks = s.split(/\s+/).filter(Boolean);
@@ -46,6 +47,13 @@ function looksLikeFileToken(tok) {
   return /[/\\]/.test(t) || /\.[A-Za-z0-9]{2,4}["']?$/i.test(t);
 }
 
+// Numeric flag values (2.5M, 00:00:05.000, 30) are not output filenames.
+function looksLikeFlagValue(tok) {
+  const t = String(tok || '').trim();
+  return /^\d+(?:\.\d+)?(?:[kKmMgG%])?$/.test(t)
+    || /^\d+(?::\d+){1,2}(?:\.\d+)?$/.test(t);
+}
+
 // The model works with template tokens, never real paths: the input is
 // always `-i {input}` and the output is always the trailing `{output}`.
 // The runner resolves both to real paths at run time.
@@ -58,10 +66,11 @@ function ensureOutputFile(args, instruction) {
   // value, so drop the dangling flag first. Valueless flags (-y, -an, -vn)
   // are kept - they are complete on their own.
   const valuedFlags = new Set([
-    '-i', '-ss', '-t', '-s', '-video_size', '-vf', '-filter:v', '-filter:a',
-    '-filter_complex', '-c', '-c:v', '-c:a', '-b:v', '-b:a', '-maxrate',
-    '-bufsize', '-ac', '-ar', '-r', '-pix_fmt', '-crf', '-preset', '-tune',
-    '-movflags', '-map', '-pass', '-passlogfile', '-f', '-frames:v',
+    '-i', '-ss', '-t', '-to', '-s', '-video_size', '-vf', '-filter:v',
+    '-filter:a', '-filter_complex', '-c', '-c:v', '-c:a', '-b:v', '-b:a',
+    '-maxrate', '-bufsize', '-ac', '-ar', '-r', '-pix_fmt', '-crf', '-preset',
+    '-tune', '-movflags', '-map', '-pass', '-passlogfile', '-f', '-frames',
+    '-frames:v', '-metadata', '-aspect', '-fs',
   ]);
   const dropped = [];
   while (out.length > 0 && valuedFlags.has(out[out.length - 1])) {
@@ -71,10 +80,10 @@ function ensureOutputFile(args, instruction) {
     corrections.push(`Dropped dangling ${dropped.join(', ')} (truncated answer left a flag with no value)`);
   }
   if (out[out.length - 1] === '{output}') return { args: out, corrections };
-  if (looksLikeFileToken(out[out.length - 1])) {
-    const cur = out[out.length - 1];
+  const last = out[out.length - 1];
+  if (looksLikeFileToken(last) && !looksLikeFlagValue(last)) {
     out[out.length - 1] = '{output}';
-    corrections.push(`Replaced "${cur}" with {output} (paths are templated, never literal)`);
+    corrections.push(`Replaced "${last}" with {output} (paths are templated, never literal)`);
     return { args: out, corrections };
   }
   out.push('{output}');
@@ -82,16 +91,41 @@ function ensureOutputFile(args, instruction) {
   return { args: out, corrections };
 }
 
+const THUMBNAIL_RE = /\bthumbnails?\b|\bposter\b|\bscreenshots?\b|\bstill\s+(?:image|frame)\b|\bcover\s+(image|frame|art)\b|\bextract\s+(?:a\s+)?(?:single\s+)?frames?\b/i;
+
+// The container named after "to/as/into/output" wins over source words:
+// "convert mkv to mp4" is mp4, and "gif to mp4" is not a gif request.
+function targetContainer(text) {
+  const re = /\b(?:to|into|as|output(?:\s+(?:as|to))?)\s+(?:a\s+|an\s+)?(mp4|mkv|webm|mov|avi|gif|mp3|png|jpe?g)\b/gi;
+  let m;
+  let last = null;
+  while ((m = re.exec(String(text || ''))) !== null) last = m[1].toLowerCase();
+  return last;
+}
+
+function extForWord(word) {
+  if (word === 'jpeg' || word === 'jpg') return '.jpg';
+  return '.' + word;
+}
+
+function audioCodecForExt(ext) {
+  if (ext === '.webm') return 'libopus';
+  if (ext === '.mp3') return 'libmp3lame';
+  return 'aac';
+}
+
 // Output container from the instruction words (plus codec hints), since the
 // templated `{output}` carries no extension. Thumbnail and gif intents own
-// their containers; otherwise instruction words win, then codec hints,
-// then .mp4. Mirrors the old ensureOutputFile/Thumbnail filename logic.
+// their containers; otherwise the last explicit target wins, then source
+// words, then codec hints, then .mp4.
 function inferOutputExt(args, instruction) {
   const text = String(instruction || '');
-  if (/\bgif\b/i.test(text)) return '.gif';
-  if (/\bthumbnails?\b|\bposter\b|\bcover\s+(image|frame|art)\b|\bextract\s+(a\s+)?frames?\b/i.test(text)) {
+  if (THUMBNAIL_RE.test(text)) {
     return /\bjpe?g\b/i.test(text) ? '.jpg' : '.png';
   }
+  const target = targetContainer(text);
+  if (target) return extForWord(target === 'gif' ? 'gif' : target);
+  if (/\bgif\b/i.test(text)) return '.gif';
   const lower = text.toLowerCase();
   const wordExt =
     /\bmkv\b/.test(lower) ? '.mkv'
@@ -265,16 +299,30 @@ function fixupInput(args) {
   const corrections = [];
   if (!Array.isArray(args)) return { args, corrections };
   const out = [...args];
-  const iIdx = out.findIndex((t) => t === '-i');
-  if (iIdx === -1 || typeof out[iIdx + 1] !== 'string' || String(out[iIdx + 1]).startsWith('-')) {
+  let kept = false;
+  for (let i = 0; i < out.length;) {
+    if (out[i] !== '-i') { i++; continue; }
+    const nx = out[i + 1];
+    if (typeof nx !== 'string' || String(nx).startsWith('-')) {
+      out.splice(i, 1);
+      corrections.push('Removed dangling "-i" (the input path is templated, never literal)');
+      continue;
+    }
+    if (!kept) {
+      if (nx !== '{input}') {
+        out[i + 1] = '{input}';
+        corrections.push(`Rewrote "-i ${nx}" as "-i {input}" (paths are templated, never literal)`);
+      }
+      kept = true;
+      i += 2;
+      continue;
+    }
+    out.splice(i, 2);
+    corrections.push(`Dropped extra "-i ${nx}" (the app runs one input file)`);
+  }
+  if (!kept) {
     out.unshift('-i', '{input}');
     corrections.push('Inserted missing "-i {input}" (paths are templated, never literal)');
-    return { args: out, corrections };
-  }
-  if (out[iIdx + 1] !== '{input}') {
-    const cur = out[iIdx + 1];
-    out[iIdx + 1] = '{input}';
-    corrections.push(`Rewrote "-i ${cur}" as "-i {input}" (paths are templated, never literal)`);
   }
   return { args: out, corrections };
 }
@@ -322,8 +370,17 @@ function fmtSec(sec) {
 
 // Shared arg-list helpers: every insertion below slots new flags before the
 // trailing output token so flag/value pairs are never split apart.
+function hasTrailingOutput(out) {
+  if (!out.length) return false;
+  const last = out[out.length - 1];
+  if (last === '{output}') return true;
+  if (!looksLikeFileToken(last) || looksLikeFlagValue(last)) return false;
+  // `-i in.mp4` is an input pair, not an output token.
+  return out[out.length - 2] !== '-i';
+}
+
 function insertBeforeOutput(out, ...tokens) {
-  const at = out.length > 0 && !String(out[out.length - 1]).startsWith('-') ? out.length - 1 : out.length;
+  const at = hasTrailingOutput(out) ? out.length - 1 : out.length;
   out.splice(at, 0, ...tokens);
   return at;
 }
@@ -372,21 +429,22 @@ function dropTimeFlag(out, flag) {
 
 // Repeated seeks: ffmpeg silently honors one of them (the last -ss wins for
 // output seeking), so a doubled flag means a wrong window with no error.
-// Keep the first occurrence - trim layers below normalize it when the
-// instruction names a window - and report every dropped duplicate.
+// Keep the last occurrence - it is the one ffmpeg would honor - and report
+// every dropped duplicate.
 function fixupDedupeSeek(args) {
   const corrections = [];
   if (!Array.isArray(args)) return { args, corrections };
   const out = [...args];
   for (const flag of ['-ss', '-t']) {
-    let seen = false;
-    for (let i = 0; i < out.length;) {
-      if (out[i] !== flag) { i++; continue; }
-      if (!seen) { seen = true; i++; continue; }
-      const nx = out[i + 1];
+    let first = out.indexOf(flag);
+    let last = out.lastIndexOf(flag);
+    while (first !== -1 && first < last) {
+      const nx = out[first + 1];
       const val = nx !== undefined && !String(nx).startsWith('-') ? ` ${nx}` : '';
-      out.splice(i, val ? 2 : 1);
-      corrections.push(`Dropped duplicate "${flag}${val}" (repeated seeks keep only one window)`);
+      out.splice(first, val ? 2 : 1);
+      corrections.push(`Dropped duplicate "${flag}${val}" (repeated seeks keep the last window)`);
+      first = out.indexOf(flag);
+      last = out.lastIndexOf(flag);
     }
   }
   return { args: out, corrections };
@@ -463,14 +521,52 @@ function fixupSizeLimit(args, instruction, durationSec) {
   const speedX = parseSpeedFactor(instruction);
   const effDuration = speedX ? durationSec / speedX : durationSec;
   const out = [...args];
+  const targetExt = inferOutputExt(out, instruction);
   const hasAN = out.includes('-an');
+  const hasVN = out.includes('-vn');
+  const audioOnly = hasVN || targetExt === '.mp3';
+  const webm = targetExt === '.webm';
+  const audioCodec = audioCodecForExt(targetExt);
   let audioBits = hasAN ? 0 : 128000;
+  // Copied streams have no bitrate to cap. Re-encode video, and bound audio,
+  // so the size limit is a real guarantee instead of ignored flags.
+  const cvIdx = out.findIndex((t) => t === '-c:v');
+  if (!audioOnly && cvIdx !== -1 && String(out[cvIdx + 1]).toLowerCase() === 'copy') {
+    out[cvIdx + 1] = webm ? 'libvpx-vp9' : 'libx264';
+    corrections.push(`Size limit: replaced \`-c:v copy\` with \`-c:v ${out[cvIdx + 1]}\` (copied video cannot be capped)`);
+  }
+  const cIdx = out.findIndex((t) => t === '-c');
+  if (!audioOnly && cIdx !== -1 && String(out[cIdx + 1]).toLowerCase() === 'copy') {
+    const codecs = ['-c:v', webm ? 'libvpx-vp9' : 'libx264'];
+    if (!hasAN && !out.some((t) => t === '-c:a')) codecs.push('-c:a', audioCodec);
+    out.splice(cIdx, 2, ...codecs);
+    corrections.push('Size limit: replaced `-c copy` with real encoders (copied streams cannot be capped)');
+  }
   const caIdx = out.findIndex((t) => t === '-c:a');
   if (!hasAN && caIdx !== -1 && String(out[caIdx + 1]).toLowerCase() === 'copy') {
-    out[caIdx + 1] = 'aac';
+    out[caIdx + 1] = audioCodec;
     out.splice(caIdx + 2, 0, '-b:a', '128k');
     audioBits = 128000;
-    corrections.push('Size limit: replaced `-c:a copy` with `-c:a aac -b:a 128k` (copied audio has no size bound)');
+    corrections.push(`Size limit: replaced \`-c:a copy\` with \`-c:a ${out[caIdx + 1]} -b:a 128k\` (copied audio has no size bound)`);
+  } else if (audioOnly) {
+    if (hasAN) return { args: out, corrections };
+    // No video stream to budget: cap the audio itself. A bare -c copy also
+    // copies audio, so it must become a real encoder before -b:a means anything.
+    const allCopyIdx = out.findIndex((t) => t === '-c');
+    if (allCopyIdx !== -1 && String(out[allCopyIdx + 1]).toLowerCase() === 'copy') {
+      out.splice(allCopyIdx, 2);
+      if (!out.some((t) => t === '-c:a')) insertBeforeOutput(out, '-c:a', audioCodec);
+      corrections.push(`Size limit: replaced \`-c copy\` with \`-c:a ${audioCodec}\` (copied audio has no size bound)`);
+    }
+    const caNow = out.findIndex((t) => t === '-c:a');
+    if (caNow !== -1 && String(out[caNow + 1]).toLowerCase() === 'copy') out[caNow + 1] = audioCodec;
+    const audioBps = Math.max(32000, Math.floor((bytes * 8 * 0.98) / effDuration));
+    const ak = Math.floor(Math.min(128000, audioBps) / 1000);
+    const baIdx = out.findIndex((t) => t === '-b:a');
+    if (baIdx !== -1) out[baIdx + 1] = `${ak}k`;
+    else insertBeforeOutput(out, '-b:a', `${ak}k`);
+    corrections.push(`Size limit: capped audio-only output at -b:a ${ak}k`);
+    return { args: out, corrections };
   } else if (!hasAN) {
     const baIdx = out.findIndex((t) => t === '-b:a');
     if (baIdx !== -1) {
@@ -524,36 +620,54 @@ function parseTrimIntent(instruction) {
   };
   const SEC = '\\s*s(?:ec(?:ond)?s?)?';
   const mid = num(new RegExp('middle\\s+(\\d+(?:\\.\\d+)?)' + SEC, 'i'));
-  if (mid && mid.n > 0) return { kind: 'middle', n: mid.n, raw: mid.raw };
+  if (mid && mid.n > 0) {
+    // "Remove the middle N" is not a single contiguous window; the pipeline
+    // rejects it instead of silently keeping the middle.
+    const removeMid = /\b(?:remove|delete|cut\s+out|drop|strip)\b[^.]{0,30}\bmiddle\b/i.test(instr);
+    return { kind: removeMid ? 'middle-remove' : 'middle', n: mid.n, raw: mid.raw };
+  }
   const last = num(new RegExp('last\\s+(\\d+(?:\\.\\d+)?)' + SEC, 'i'));
   if (last && last.n > 0) {
-    // Explicit keep-the-tail phrasing beats everything ("keep/extract/only the last N").
-    const keepTail = /\b(keep|keeping|extract|only|just)\b[\w\s]{0,12}\blast\s+\d/i.test(instr);
-    // Otherwise trim/cut/remove/delete/drop = cut those seconds off.
-    const removal = !keepTail
-      && /(remove|removing|delete|delet|trim|trimming|cut|cutting|drop|strip|without)/i.test(instr);
+    // Explicit keep-the-tail phrasing beats removal verbs. "Without audio"
+    // describes the stream, not a cut, so it never implies removal.
+    const keepTail = /\b(?:keep|keeping|extract|only|just)\b[^.]{0,40}\blast\s+\d/i.test(instr);
+    const exceptLast = /\b(?:everything|all)\b[^.]{0,30}\b(?:except|but\s+not)\b[^.]{0,30}\blast\s+\d/i.test(instr);
+    const removal = exceptLast || (!keepTail
+      && /\b(?:remove|removing|delete|delet|trim|trimming|cut|cutting|drop|strip)\b/i.test(instr));
     return { kind: removal ? 'last-remove' : 'last-keep', n: last.n, raw: last.raw };
   }
   const first = num(new RegExp('\\bfirst\\s+(\\d+(?:\\.\\d+)?)' + SEC, 'i'));
   if (first && first.n > 0) {
-    // Mirror of the last-N verbs: "keep the first N" keeps the head [0, N],
-    // "remove the first N" cuts the head off and keeps [N, end].
-    const keepHead = /\b(keep|keeping|extract|only|just)\b[\w\s]{0,12}\bfirst\s+\d/i.test(instr);
-    const removal = !keepHead
-      && /(remove|removing|delete|delet|trim|trimming|cut|cutting|drop|strip|without)/i.test(instr);
+    // "Trim it to the first N" keeps the head, while "remove the first N"
+    // cuts it. "Keep everything except the first N" is a first-remove.
+    const keepHead = /\b(?:keep|keeping|extract|only|just)\b[^.]{0,40}\bfirst\s+\d/i.test(instr)
+      || /\b(?:trim|cut|shorten)\b[^.]{0,40}\b(?:to|down\s+to|until)\s+(?:the\s+)?first\s+\d/i.test(instr);
+    const exceptFirst = /\b(?:everything|all)\b[^.]{0,30}\b(?:except|but\s+not)\b[^.]{0,30}\bfirst\s+\d/i.test(instr);
+    const removal = exceptFirst || (!keepHead
+      && /\b(?:remove|removing|delete|delet|trim|trimming|cut|cutting|drop|strip)\b/i.test(instr));
     return { kind: removal ? 'first-remove' : 'first-keep', n: first.n, raw: first.raw };
   }
-  const rangeM = /(?:\bfrom\s+|\bbetween\s+)(\d+(?:\.\d+)?)\s*(?:s(?:ec(?:ond)?s?)?\s*)?(?:to|and|-)\s*(\d+(?:\.\d+)?)(?:\s*s(?:ec(?:ond)?s?)?)?\b/i.exec(instr)
-    || /\b(\d+(?:\.\d+)?)\s*(?:s(?:ec(?:ond)?s?)?\s*)?(?:to|-)\s*(\d+(?:\.\d+)?)\s*s(?:ec(?:ond)?s?)?\b/i.exec(instr)
-    || /\bseconds?\s+(\d+(?:\.\d+)?)\s*(?:to|-)\s*(\d+(?:\.\d+)?)\b/i.exec(instr);
-  // Keyword form ("from/between A to B") and leading-seconds form
-  // ("seconds A to B") need no trailing unit; the bare form requires one
-  // (so "720 to 1080" resolutions never match, and the b>a guard below
-  // rejects them anyway).
-  if (rangeM) {
-    const a = parseFloat(rangeM[1]);
-    const b = parseFloat(rangeM[2]);
-    if (a >= 0 && b > a) return { kind: 'range', a, b, rawA: rangeM[1], rawB: rangeM[2] };
+  // Range forms require a time unit, an explicit "seconds" word, or a
+  // keep/extract/cut verb. Resolutions, frame rates, and bitrates never
+  // become a time window.
+  const A = '(\\d+(?::\\d+){0,2}(?:\\.\\d+)?)';
+  const U = '\\s*(?:s(?:ec(?:ond)?s?)?)';
+  const rangePatterns = [
+    new RegExp(`\\bfrom\\s+${A}${U}?\\s*(?:to|until|-)\\s*${A}${U}\\b`, 'i'),
+    new RegExp(`\\bfrom\\s+${A}${U}\\s*(?:to|until|-)\\s*${A}\\b`, 'i'),
+    new RegExp(`\\bbetween\\s+${A}${U}?\\s*(?:and|to)\\s*${A}${U}\\b`, 'i'),
+    new RegExp(`\\bseconds?\\s+${A}\\s*(?:to|until|-)\\s*${A}\\b`, 'i'),
+    new RegExp(`\\b(?:keep|extract|cut)\\s+(?:from\\s+)?${A}\\s*(?:to|until|-)\\s*${A}\\s*(?!\\s*(?:fps|mbps|kbps|kb|mb|gb|px|p\\b|%))`, 'i'),
+    new RegExp(`\\b${A}${U}\\s*(?:to|until|-)\\s*${A}${U}\\b`, 'i'),
+  ];
+  for (const re of rangePatterns) {
+    const m = re.exec(instr);
+    if (!m) continue;
+    const a = parseTimeVal(m[1]);
+    const b = parseTimeVal(m[2]);
+    if (a !== null && b !== null && a >= 0 && b > a) {
+      return { kind: 'range', a, b, rawA: m[1], rawB: m[2] };
+    }
   }
   return { kind: 'none', n: 0, raw: '' };
 }
@@ -713,9 +827,10 @@ function fixupRangeTrim(args, instruction) {
   return { args: out, corrections };
 }
 
-// No-op seeks with no trim intent: drop `-ss 0` always; drop `-t` at full
-// duration only at 1x speed (under speed changes it truncates the stretched
-// output). Runs after the trims, before the thumbnail.
+// No-op seeks with no trim intent: drop `-ss 0` always; drop `-t` at the
+// input duration even under a speed change (slow motion stretches the output,
+// so a source-length -t would truncate it). Runs after the trims, before the
+// thumbnail.
 function fixupNoopSeek(args, instruction, durationSec) {
   const corrections = [];
   if (!Array.isArray(args)) return { args, corrections };
@@ -727,8 +842,7 @@ function fixupNoopSeek(args, instruction, durationSec) {
     out.splice(f.ssIdx, 2);
     corrections.push('Dropped `-ss 0` (seeks nowhere)');
   }
-  const speedX = parseSpeedFactor(instruction);
-  if (durationSec > 0 && (!speedX || speedX === 1)) {
+  if (durationSec > 0) {
     const g = getTimeFlags(out);
     if (g.tIdx !== -1 && timesApprox(g.tVal, durationSec, 0.51)) {
       const val = out[g.tIdx + 1];
@@ -741,10 +855,9 @@ function fixupNoopSeek(args, instruction, durationSec) {
 
 // Contradictions ffmpeg rejects outright (or that violate runner contracts):
 // two-pass flags (single-shot runner), audio-codec flags combined with -an,
-// `-c:v copy` paired with video filters (filtering requires re-encoding),
-// and `-c:v copy` paired with a trim (cuts land between keyframes).
+// stream-copy paired with filters or trims (filtering and accurate cuts
+// require re-encoding). Bare `-c copy` is handled too, not just `-c:v copy`.
 // Runs before size-limit insertions (flag/value pairs must stay adjacent).
-// The container comes from the instruction words, mirroring ensureOutputFile.
 // Returns { args, corrections } - never throws.
 function fixupConflicts(args, instruction) {
   const corrections = [];
@@ -775,71 +888,120 @@ function fixupConflicts(args, instruction) {
     const muted = 'contradicts -an (muted output has no audio stream)';
     for (const f of ['-c:a', '-b:a', '-ac', '-ar', '-af', '-filter:a']) dropValued(f, muted);
   }
-  // Stream-copy cannot filter: any video filter requires re-encoding.
-  // Explicit remux intent ("without re-encoding") wins over the filters -
-  // they are dropped. Otherwise the copy is replaced with a real encoder.
+  const text = String(instruction || '').toLowerCase();
+  const remux = /\bremux\b|without\s+re[\s-]?encod|no\s+re[\s-]?encod|\bstream\s*copy\b|just\s+(change|convert)\s+the\s+container|keep\s+the\s+(video\s+)?codecs?\b/i.test(text);
+  const trimKind = parseTrimIntent(instruction).kind;
   const hasVideoFilter = out.includes('-vf') || out.includes('-filter:v') || out.includes('-filter_complex');
-  const cvIdx = out.findIndex((t) => t === '-c:v');
+  const hasAudioFilter = out.includes('-af') || out.includes('-filter:a');
+  const targetExt = inferOutputExt(out, instruction);
+  const videoCodec = targetExt === '.webm' ? 'libvpx-vp9' : targetExt === '.gif' ? null : 'libx264';
+  const audioCodec = audioCodecForExt(targetExt);
+
+  // Bare -c copy covers both streams: any filter or accurate trim makes the
+  // single command need real encoders. Explicit remux still wins and drops
+  // the filters, exactly like the -c:v copy path below.
+  const cIdx = out.findIndex((t) => t === '-c');
+  if (cIdx !== -1 && String(out[cIdx + 1]).toLowerCase() === 'copy') {
+    if (remux) {
+      if (hasVideoFilter || hasAudioFilter) {
+        const dropped = dropValuedFlags(out, ['-vf', '-filter:v', '-filter_complex', '-af', '-filter:a']);
+        corrections.push(`Removed ${dropped.join(', ')} (remux requested: stream copy cannot filter)`);
+      }
+    } else if (hasVideoFilter || hasAudioFilter || trimKind !== 'none') {
+      if (!videoCodec) {
+        out.splice(cIdx, 2);
+        corrections.push('Removed `-c copy` (gif output uses its default encoder)');
+      } else {
+        const codecs = ['-c:v', videoCodec];
+        if (!out.includes('-an') && !out.some((t) => t === '-c:a')) codecs.push('-c:a', audioCodec);
+        out.splice(cIdx, 2, ...codecs);
+        corrections.push(`Replaced \`-c copy\` with \`${codecs.join(' ')}\` (filtering/trimming cannot stream-copy)`);
+      }
+    }
+  }
+
+  // Stream-copy video cannot filter. Explicit remux intent wins over the
+  // filters - they are dropped. Otherwise the copy is replaced.
+  let cvIdx = out.findIndex((t) => t === '-c:v');
   if (hasVideoFilter && cvIdx !== -1 && String(out[cvIdx + 1]).toLowerCase() === 'copy') {
-    const text = String(instruction || '').toLowerCase();
-    const remux = /\bremux\b|without\s+re[\s-]?encod|no\s+re[\s-]?encod|\bstream\s*copy\b|just\s+(change|convert)\s+the\s+container|keep\s+the\s+(video\s+)?codecs?\b/i.test(text);
     if (remux) {
       const dropped = dropValuedFlags(out, ['-vf', '-filter:v', '-filter_complex']);
       corrections.push(`Removed ${dropped.join(', ')} (remux requested: stream copy cannot filter)`);
-    } else if (/\bwebm\b/.test(text)) {
-      out[cvIdx + 1] = 'libvpx-vp9';
-      corrections.push('Replaced `-c:v copy` with `-c:v libvpx-vp9` (filters cannot stream-copy)');
-    } else if (/\bgif\b/.test(text)) {
+    } else if (!videoCodec) {
       out.splice(cvIdx, 2);
       corrections.push('Removed `-c:v copy` (gif output uses its default encoder with filters)');
     } else {
-      out[cvIdx + 1] = 'libx264';
-      corrections.push('Replaced `-c:v copy` with `-c:v libx264` (filters cannot stream-copy)');
+      out[cvIdx + 1] = videoCodec;
+      corrections.push(`Replaced \`-c:v copy\` with \`-c:v ${videoCodec}\` (filters cannot stream-copy)`);
     }
   }
   // Accurate cuts cannot stream-copy: a trim between keyframes corrupts the
   // cut, so a trim intent re-encodes. Explicit remux keeps copy as asked.
-  const trimKind = parseTrimIntent(instruction).kind;
-  const cvTrimIdx = out.findIndex((t) => t === '-c:v');
-  if (trimKind !== 'none' && cvTrimIdx !== -1 && String(out[cvTrimIdx + 1]).toLowerCase() === 'copy') {
-    const text = String(instruction || '').toLowerCase();
-    const remux = /\bremux\b|without\s+re[\s-]?encod|no\s+re[\s-]?encod|\bstream\s*copy\b|just\s+(change|convert)\s+the\s+container|keep\s+the\s+(video\s+)?codecs?\b/i.test(text);
-    if (!remux) {
-      if (/\bwebm\b/.test(text)) {
-        out[cvTrimIdx + 1] = 'libvpx-vp9';
-        corrections.push('Replaced `-c:v copy` with `-c:v libvpx-vp9` (trimming cannot stream-copy accurately)');
-      } else if (/\bgif\b/.test(text)) {
-        out.splice(cvTrimIdx, 2);
-        corrections.push('Removed `-c:v copy` (gif output uses its default encoder with a trim)');
-      } else {
-        out[cvTrimIdx + 1] = 'libx264';
-        corrections.push('Replaced `-c:v copy` with `-c:v libx264` (trimming cannot stream-copy accurately)');
-      }
+  cvIdx = out.findIndex((t) => t === '-c:v');
+  if (trimKind !== 'none' && cvIdx !== -1 && String(out[cvIdx + 1]).toLowerCase() === 'copy' && !remux) {
+    if (!videoCodec) {
+      out.splice(cvIdx, 2);
+      corrections.push('Removed `-c:v copy` (gif output uses its default encoder with a trim)');
+    } else {
+      out[cvIdx + 1] = videoCodec;
+      corrections.push(`Replaced \`-c:v copy\` with \`-c:v ${videoCodec}\` (trimming cannot stream-copy accurately)`);
     }
+  }
+  // Audio filters require audio re-encoding; copied audio cannot be filtered.
+  const caIdx = out.findIndex((t) => t === '-c:a');
+  if (hasAudioFilter && caIdx !== -1 && String(out[caIdx + 1]).toLowerCase() === 'copy') {
+    out[caIdx + 1] = audioCodec;
+    corrections.push(`Replaced \`-c:a copy\` with \`-c:a ${audioCodec}\` (audio filters require re-encoding)`);
   }
   return { args: out, corrections };
 }
 
-// Playback speed factor from the instruction ("2x faster", "half speed",
-// "slow down"). Bare "speed up" defaults to 2x, bare "slow down" to 0.5x.
-// Returns null when no speed intent is recognizable. Capped at 16x.
+// Playback speed factor from the instruction. "2x slower" and "slow motion
+// 2x" mean half speed; "slow down to 0.25x" is a direct playback factor;
+// "slow down by 2x" is half speed. Bare "speed up" defaults to 2x and bare
+// "slow down" to 0.5x. Returns null when no speed intent is recognizable.
 function parseSpeedFactor(instruction) {
   const instr = String(instruction || '');
-  const m = /(\d+(?:\.\d+)?)\s*[x×]\s*(?:faster|speed|quicker|slow(?:er)?|motion)/i.exec(instr);
+  const bounded = (x) => (Number.isFinite(x) && x > 0 && x <= 16 ? x : null);
+  let m = /(\d+(?:\.\d+)?)\s*(?:x|×|times?)\s*(?:slower|slow(?:er)?|slow[\s-]*motion|motion)/i.exec(instr);
+  if (m) return bounded(1 / parseFloat(m[1]));
+  m = /(\d+(?:\.\d+)?)\s*(?:x|×|times?)\s*(?:faster|speed|quicker)/i.exec(instr);
+  if (m) return bounded(parseFloat(m[1]));
+  m = /\bto\s+(\d+(?:\.\d+)?)\s*(?:x|×|times?)\b/i.exec(instr);
+  if (m && /\b(?:speed|slow|fast|play|motion)\b/i.test(instr)) return bounded(parseFloat(m[1]));
+  m = /\b(?:slow(?:ing)?\s+(?:it\s+)?down|slow\s+down|slower)\b[^.\d]{0,20}(\d+(?:\.\d+)?)\s*(?:x|×|times?)?/i.exec(instr);
   if (m) {
+    const between = instr.slice(m.index, m.index + m[0].length);
     const x = parseFloat(m[1]);
-    if (x > 0 && x <= 16) return x;
-    return null;
+    return bounded(/\b(?:to|at)\b/i.test(between) ? x : 1 / x);
   }
-  if (/\bhalf\s+speed\b|\bslow\s+motion\b/i.test(instr)) return 0.5;
-  if (/\bdouble\s+speed\b/i.test(instr)) return 2;
-  if (/\bspeed\b[\w\s]{0,12}\bup\b/i.test(instr)) return 2;
-  if (/\bslow\b[\w\s]{0,12}\bdown\b/i.test(instr)) return 0.5;
+  m = /\b(?:speed(?:ing)?\s+(?:it\s+)?up|speed\s+up|faster|fast[\s-]*forward)\b[^.\d]{0,20}(\d+(?:\.\d+)?)\s*(?:x|×|times?)?/i.exec(instr);
+  if (m) return bounded(parseFloat(m[1]));
+  m = /\bslow[\s-]*(?:motion|mo)\b[^.\d]{0,20}(\d+(?:\.\d+)?)\s*(?:x|×|times?)/i.exec(instr);
+  if (m) return bounded(1 / parseFloat(m[1]));
+  m = /(\d+(?:\.\d+)?)\s*%\s*(?:of\s+)?(?:the\s+)?(?:speed|playback|faster|slower)/i.exec(instr);
+  if (m) return bounded(parseFloat(m[1]) / 100);
+  m = /(\d+(?:\.\d+)?)\s*(?:x|×|times?)\b/i.exec(instr);
+  if (m) return bounded(parseFloat(m[1]));
+  if (/\bhalf\s+speed\b|\bslow\s+motion\b|\bslow[\s-]*mo\b|\bhalf[\s-]*speed\b/i.test(instr)) return 0.5;
+  if (/\bdouble\s+speed\b|\btime[\s-]*lapse\b/i.test(instr)) return 2;
+  if (/\bspeed\b[\w\s]{0,12}\bup\b|\bfaster\b/i.test(instr)) return 2;
+  if (/\bslow\b[\w\s]{0,12}\bdown\b|\bslower\b/i.test(instr)) return 0.5;
   return null;
 }
 
 function fmtTempo(v) {
-  return String(Math.round(v * 100) / 100);
+  return String(Math.round(v * 10000) / 10000);
+}
+
+// setpts exact expression: integral inverse stays "N*PTS", integral playback
+// factor stays "PTS/N"; other factors keep enough decimals for A/V sync.
+function setptsExpr(x) {
+  if (Math.abs(x - 2) < 1e-9) return 'setpts=0.5*PTS';
+  const inv = 1 / x;
+  if (Math.abs(inv - Math.round(inv)) < 1e-9) return `setpts=${Math.round(inv)}*PTS`;
+  if (Math.abs(x - Math.round(x)) < 1e-9) return `setpts=PTS/${Math.round(x)}`;
+  return `setpts=PTS/${fmtTempo(x)}`;
 }
 
 // atempo accepts 0.5-2.0 per instance - chain it for wider factors.
@@ -872,7 +1034,7 @@ function fixupSpeed(args, instruction) {
   if (x === null || !(x > 0) || x > 16 || x === 1) return { args, corrections };
 
   const out = [...args];
-  const wantVf = `setpts=${fmtTempo(1 / x)}*PTS`;
+  const wantVf = setptsExpr(x);
   const vfIdx = out.findIndex((t) => t === '-vf' || t === '-filter:v');
   if (vfIdx !== -1 && typeof out[vfIdx + 1] === 'string' && /setpts=/.test(out[vfIdx + 1])) {
     const nv = out[vfIdx + 1].replace(/setpts=[^,]*/g, wantVf);
@@ -919,6 +1081,11 @@ function fixupFps(args, instruction) {
   const n = parseFps(instruction);
   if (n === null) return { args, corrections };
   const out = [...args];
+  // An explicit -r overrides the fps filter; the instruction names the cap.
+  const droppedRates = dropValuedFlags(out, ['-r']);
+  if (droppedRates.length > 0) {
+    corrections.push(`Frame rate: dropped ${droppedRates.join(', ')} (it would override fps=${n})`);
+  }
   const vfIdx = out.findIndex((t) => t === '-vf' || t === '-filter:v');
   if (vfIdx !== -1 && typeof out[vfIdx + 1] === 'string' && /fps=/.test(out[vfIdx + 1])) {
     const nv = out[vfIdx + 1].replace(/fps=[\d.]*/g, `fps=${n}`);
@@ -950,6 +1117,11 @@ function fixupWidthScale(args, instruction) {
   const w = parseWidth(instruction);
   if (w === null) return { args, corrections };
   const out = [...args];
+  // -s/-video_size overrides the scale filter; the instruction owns geometry.
+  const droppedSizes = dropValuedFlags(out, ['-s', '-video_size']);
+  if (droppedSizes.length > 0) {
+    corrections.push(`Width ${w}px: dropped ${droppedSizes.join(', ')} (it would override scale=${w}:-2)`);
+  }
   const vfIdx = out.findIndex((t) => t === '-vf' || t === '-filter:v');
   if (vfIdx !== -1 && typeof out[vfIdx + 1] === 'string' && /scale=/.test(out[vfIdx + 1])) {
     const nv = out[vfIdx + 1].replace(/scale=[^,]*/g, `scale=${w}:-2`);
@@ -968,7 +1140,7 @@ function fixupWidthScale(args, instruction) {
 // CCW) → transpose=2, 180 → transpose=2,transpose=2, flips → hflip/vflip.
 function parseRotate(instruction) {
   const instr = String(instruction || '');
-  const m = /rotat(?:e|ing)?\s*(?:by\s*)?(90|180|270)(?:\s*(?:degrees?|°))?/i.exec(instr);
+  const m = /rotat(?:e|ing)?(?:\s+(?:it|the\s+video|this|the\s+clip))?\s*(?:by\s*)?(90|180|270)(?:\s*(?:degrees?|°))?/i.exec(instr);
   const ccw = /counter|ccw|anti[\s-]?clockwise/i.test(instr);
   if (m) {
     const d = parseInt(m[1], 10);
@@ -1010,14 +1182,29 @@ function fixupRotate(args, instruction) {
   return { args: out, corrections };
 }
 
-// Volume factor from the instruction ("boost volume", "half volume",
-// "150%"). Mute stays on the -an path. Null when unrecognizable.
+// Volume factor from the instruction ("boost volume by 50%" = 1.5,
+// "volume at 50%" = 0.5, "half volume" = 0.5). Mute stays on the -an path.
+// Percentages only count when the surrounding words are about audio - a file
+// size like "make it 50% smaller" must never become a volume change.
 function parseVolume(instruction) {
   const instr = String(instruction || '');
-  const pct = /(?:volume\s*)?(\d+(?:\.\d+)?)\s*%/i.exec(instr);
-  if (pct) {
-    const v = Math.round((parseFloat(pct[1]) / 100) * 100) / 100;
-    return v > 0 && v <= 4 ? v : null;
+  const pctRe = /(\d+(?:\.\d+)?)\s*%/g;
+  let m;
+  while ((m = pctRe.exec(instr)) !== null) {
+    const context = instr.slice(Math.max(0, m.index - 36), m.index + m[0].length + 24);
+    if (!/\b(volume|audio|sound|louder|quieter|loud|boost|reduce|increase|lower|raise)\b/i.test(context)) continue;
+    const p = parseFloat(m[1]);
+    if (!(p > 0)) continue;
+    if (/\b(?:reduce|lower|decrease|quieter|turn\s+(?:it\s+)?down)\b/i.test(context)) {
+      const v = Math.round((p / 100) * 100) / 100;
+      if (v > 0 && v <= 4) return v;
+    }
+    if (/\bby\b/i.test(context) || /\b(?:boost|increase|raise|louder|turn\s+(?:it\s+)?up)\b/i.test(context)) {
+      const v = Math.round((1 + p / 100) * 100) / 100;
+      if (v > 0 && v <= 4) return v;
+    }
+    const v = Math.round((p / 100) * 100) / 100;
+    if (v > 0 && v <= 4) return v;
   }
   if (/\blouder\b/i.test(instr)) return 1.5;
   if (/\bquieter\b|\bhalf\s+volume\b/i.test(instr)) return 0.5;
@@ -1036,6 +1223,13 @@ function fixupVolume(args, instruction) {
   if (v === null) return { args, corrections };
   const out = [...args];
   if (out.includes('-an')) return { args: out, corrections };
+  // Copied audio cannot pass through the volume filter.
+  const caIdx = out.findIndex((t) => t === '-c:a');
+  if (caIdx !== -1 && String(out[caIdx + 1]).toLowerCase() === 'copy') {
+    const codec = audioCodecForExt(inferOutputExt(out, instruction));
+    out[caIdx + 1] = codec;
+    corrections.push(`Volume: replaced \`-c:a copy\` with \`-c:a ${codec}\` (audio filters require re-encoding)`);
+  }
   const want = `volume=${v}`;
   const afIdx = out.findIndex((t) => t === '-af' || t === '-filter:a');
   if (afIdx !== -1 && typeof out[afIdx + 1] === 'string' && /volume=/.test(out[afIdx + 1])) {
@@ -1056,7 +1250,9 @@ function fixupVolume(args, instruction) {
 function fixupGif(args, instruction) {
   const corrections = [];
   if (!Array.isArray(args)) return { args, corrections };
-  if (!/\bgif\b/i.test(String(instruction || ''))) return { args, corrections };
+  // "gif to mp4" mentions gif but targets mp4 - only a gif container gets
+  // GIF defaults.
+  if (inferOutputExt(args, instruction) !== '.gif') return { args, corrections };
   const out = [...args];
   const vfIdx = out.findIndex((t) => t === '-vf' || t === '-filter:v');
   const chain = vfIdx !== -1 && typeof out[vfIdx + 1] === 'string' ? out[vfIdx + 1] : '';
@@ -1074,7 +1270,7 @@ function fixupGif(args, instruction) {
   }
   // The gif container takes only its default encoder - an explicit -c:v (or
   // tuning for it) fails the run, so it goes.
-  const droppedCodecs = dropValuedFlags(out, ['-c:v', '-preset', '-tune', '-crf', '-pix_fmt']);
+  const droppedCodecs = dropValuedFlags(out, ['-c', '-c:v', '-preset', '-tune', '-crf', '-pix_fmt']);
   if (droppedCodecs.length > 0) {
     corrections.push(`GIF: dropped encoder settings (${droppedCodecs.join(', ')}) - gif uses its default encoder`);
   }
@@ -1091,14 +1287,29 @@ function fixupGif(args, instruction) {
 // and bitrate. Time defaults to the middle with a known duration, else 0.
 function parseThumbTime(instruction, duration) {
   const instr = String(instruction || '');
-  const at = /at\s+(\d+(?::\d+){0,2}(?:\.\d+)?)/i.exec(instr);
+  // Percentages need the duration: "thumbnail at 50%".
+  const pct = /(\d+(?:\.\d+)?)\s*%/i.exec(instr);
+  if (pct && duration > 0) {
+    return fmtSec(duration * (parseFloat(pct[1]) / 100));
+  }
+  const at = /\bat\s+(?:the\s+)?(\d+(?::\d+){0,2}(?:\.\d+)?)(?:\s*(?:s(?:ec(?:ond)?s?)?))?(?:\s+(?:mark|point))?/i.exec(instr);
   if (at) {
     const v = parseTimeVal(at[1]);
     if (v !== null && v >= 0) return fmtSec(v);
   }
-  if (duration > 0) return fmtSec(duration / 2);
+  const inAt = /(\d+(?::\d+){0,2}(?:\.\d+)?)\s*(?:s(?:ec(?:ond)?s?)?)\s+(?:in|into)\b/i.exec(instr);
+  if (inAt) {
+    const v = parseTimeVal(inAt[1]);
+    if (v !== null && v >= 0) return fmtSec(v);
+  }
+  const after = /\bafter\s+(\d+(?::\d+){0,2}(?:\.\d+)?)\s*(?:s(?:ec(?:ond)?s?)?)\b/i.exec(instr);
+  if (after) {
+    const v = parseTimeVal(after[1]);
+    if (v !== null && v >= 0) return fmtSec(v);
+  }
   const any = /(\d+(?:\.\d+)?)\s*s(?:ec(?:ond)?s?)?\b/i.exec(instr);
   if (any) return fmtSec(parseFloat(any[1]));
+  if (duration > 0) return fmtSec(duration / 2);
   return '0';
 }
 
@@ -1106,21 +1317,23 @@ function fixupThumbnail(args, instruction, duration) {
   const corrections = [];
   if (!Array.isArray(args)) return { args, corrections };
   const instr = String(instruction || '');
-  if (!/\bthumbnails?\b|\bposter\b|\bcover\s+(image|frame|art)\b|\bextract\s+(a\s+)?frames?\b/i.test(instr)) {
+  if (!THUMBNAIL_RE.test(instr)) {
     return { args, corrections };
   }
   const out = [...args];
   // A still takes the image container's default encoder: an explicit video
   // codec (or tuning for it) either fails the run or writes a corrupt file,
-  // so it goes. -pix_fmt stays - it is valid for stills.
-  const droppedCodecs = dropValuedFlags(out, ['-c:v', '-preset', '-tune', '-crf']);
+  // so it goes. Bare -c copy and audio codecs go too. -pix_fmt stays - it is
+  // valid for stills.
+  const droppedCodecs = dropValuedFlags(out, ['-c', '-c:v', '-c:a', '-preset', '-tune', '-crf']);
   if (droppedCodecs.length > 0) {
     corrections.push(`Thumbnail: dropped encoder settings (${droppedCodecs.join(', ')}) - the image container picks its encoder`);
   }
   if (parseTrimIntent(instr).kind === 'none') {
-    setTimeFlags(out, parseThumbTime(instr, duration), null);
+    const thumbTime = parseThumbTime(instr, duration);
+    setTimeFlags(out, thumbTime, null);
     if (dropTimeFlag(out, '-t')) corrections.push('Thumbnail: dropped -t (a still needs no duration window)');
-    corrections.push(`Thumbnail: seeking to ${parseThumbTime(instr, duration)}s`);
+    corrections.push(`Thumbnail: seeking to ${thumbTime}s`);
   }
   const fIdx = out.findIndex((t) => t === '-frames:v');
   if (fIdx !== -1) {
@@ -1177,7 +1390,70 @@ function buildSpeedLine(instruction) {
   const x = parseSpeedFactor(instruction);
   if (x === null || !(x > 0) || x > 16 || x === 1) return '';
   return `Speed: play at ${fmtTempo(x)}x. ` +
-    `Use exactly -vf setpts=${fmtTempo(1 / x)}*PTS -af ${atempoChain(x)}.\n`;
+    `Use exactly -vf ${setptsExpr(x)} -af ${atempoChain(x)}.\n`;
+}
+
+// The simple filter layers append -vf/-af. A model-supplied -filter_complex
+// cannot be combined with those flags, so the pipeline refuses with an
+// actionable error instead of letting ffmpeg fail later or silently ignore
+// half the request. Users can still edit the command manually.
+function filterGraphConflict(args, instruction) {
+  if (!Array.isArray(args) || !args.includes('-filter_complex')) return null;
+  const text = String(instruction || '');
+  const speed = parseSpeedFactor(text);
+  const wants = (speed !== null && speed !== 1)
+    || parseFps(text) !== null
+    || parseWidth(text) !== null
+    || parseRotate(text) !== null
+    || parseVolume(text) !== null
+    || inferOutputExt(args, text) === '.gif'
+    || /(?:^|\s)-s\s+\d{3,4}p/i.test(args.join(' '));
+  if (!wants) return null;
+  return 'This request needs a simple -vf/-af filter, but the model returned -filter_complex. '
+    + 'Edit the command box manually or rephrase without a custom filter graph.';
+}
+
+// Container/codec agreement: mp4/mov cannot carry VP9/Opus, webm cannot carry
+// H.264/AAC. Copy is left alone (an explicit remux intent owns that choice).
+function fixupContainerCodecs(args, instruction) {
+  const corrections = [];
+  if (!Array.isArray(args)) return { args, corrections };
+  const ext = inferOutputExt(args, instruction);
+  const out = [...args];
+  let videoFrom;
+  let videoTo;
+  let audioFrom;
+  let audioTo;
+  if (ext === '.webm') {
+    videoFrom = new Set(['libx264', 'libx265', 'mpeg4', 'h264', 'h265']);
+    videoTo = 'libvpx-vp9';
+    audioFrom = new Set(['aac', 'libmp3lame', 'mp3']);
+    audioTo = 'libopus';
+  } else if (ext === '.mp3') {
+    const idx = out.findIndex((t) => t === '-c:a');
+    if (idx !== -1 && new Set(['aac', 'libopus', 'libvorbis', 'vorbis', 'opus']).has(String(out[idx + 1]).toLowerCase())) {
+      out[idx + 1] = 'libmp3lame';
+      corrections.push('Container .mp3: replaced the audio codec with libmp3lame');
+    }
+    return { args: out, corrections };
+  } else if (ext === '.mp4' || ext === '.mov') {
+    videoFrom = new Set(['libvpx-vp9', 'libvpx']);
+    videoTo = 'libx264';
+    audioFrom = new Set(['libopus', 'libvorbis', 'vorbis', 'opus']);
+    audioTo = 'aac';
+  } else {
+    return { args: out, corrections };
+  }
+  for (const [flag, from, to] of [['-c:v', videoFrom, videoTo], ['-c:a', audioFrom, audioTo]]) {
+    const idx = out.findIndex((t) => t === flag);
+    if (idx === -1) continue;
+    const cur = String(out[idx + 1]).toLowerCase();
+    if (from.has(cur)) {
+      out[idx + 1] = to;
+      corrections.push(`Container ${ext}: replaced \`${flag} ${cur}\` with \`${flag} ${to}\``);
+    }
+  }
+  return { args: out, corrections };
 }
 
 // Fixed translation order in one place: token fixes, filter construction
@@ -1190,6 +1466,7 @@ function runTranslationPipeline(tokens, context) {
   const steps = [
     (a) => fixupArgs(a),
     (a) => fixupCodecs(a),
+    (a) => fixupContainerCodecs(a, instruction),
     (a) => fixupDedupeSeek(a),
     (a) => fixupSpeed(a, instruction),
     (a) => fixupFps(a, instruction),
@@ -1210,6 +1487,17 @@ function runTranslationPipeline(tokens, context) {
   ];
   const corrections = [];
   let args = Array.isArray(tokens) ? [...tokens] : tokens;
+  const trimIntent = parseTrimIntent(instruction);
+  if (trimIntent.kind === 'middle-remove') {
+    return {
+      args,
+      corrections,
+      error: 'Removing the middle is not a single contiguous cut, so this request is unsupported. '
+        + 'Ask to keep the first and last parts separately instead.',
+    };
+  }
+  const conflict = filterGraphConflict(args, instruction);
+  if (conflict) return { args, corrections, error: conflict };
   for (const step of steps) {
     const r = step(args);
     args = r.args;
@@ -1228,6 +1516,8 @@ module.exports = {
   P_HEIGHTS,
   fixupArgs,
   fixupCodecs,
+  fixupContainerCodecs,
+  filterGraphConflict,
   quoteArgs,
   fixupInput,
   parseHMS,

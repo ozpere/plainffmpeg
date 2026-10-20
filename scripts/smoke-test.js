@@ -89,6 +89,15 @@ async function main() {
     mainMod.sanitizeModelOutput('<think>-i in.mp4 out.mkv'),
     '-i in.mp4 out.mkv'
   );
+  // shell prompts and the binary name are stripped before tokenizing
+  assert.strictEqual(
+    mainMod.sanitizeModelOutput('$ ffmpeg -i in.mp4 out.mkv'),
+    '-i in.mp4 out.mkv'
+  );
+  assert.strictEqual(
+    mainMod.sanitizeModelOutput('> ffmpeg.exe -i in.mp4 out.mkv'),
+    '-i in.mp4 out.mkv'
+  );
   // missing output file is recovered as the template token (the runner
   // resolves it; the container comes from inferOutputExt, not a filename)
   assert.strictEqual(typeof mainMod.ensureOutputFile, 'function');
@@ -110,6 +119,13 @@ async function main() {
   eo = mainMod.ensureOutputFile(['-i', '{input}', '-c:v', 'libx264', '-an'], 'convert to mp4 and mute it');
   assert.deepStrictEqual(eo.args, ['-i', '{input}', '-c:v', 'libx264', '-an', '{output}']);
   assert.strictEqual(eo.corrections.length, 1);
+  // -to is a valued flag too; a truncated one must not swallow the token
+  eo = mainMod.ensureOutputFile(['-i', '{input}', '-c:v', 'libx264', '-to'], 'trim by end time');
+  assert.deepStrictEqual(eo.args, ['-i', '{input}', '-c:v', 'libx264', '{output}']);
+  assert.strictEqual(eo.corrections.length, 2);
+  // numeric flag values are not output filenames
+  eo = mainMod.ensureOutputFile(['-i', '{input}', '-b:v', '2.5M'], 'compress it');
+  assert.deepStrictEqual(eo.args, ['-i', '{input}', '-b:v', '2.5M', '{output}']);
 
   // tokenizer: quotes preserved, missing input templated
   assert.deepStrictEqual(
@@ -157,6 +173,17 @@ async function main() {
   cd = mainMod.fixupCodecs(['-i', '{input}', '-c:v', 'Copy', '{output}']);
   assert.deepStrictEqual(cd.args, ['-i', '{input}', '-c:v', 'copy', '{output}']);
   assert.strictEqual(cd.corrections.length, 1, 'capitalized copy normalizes too');
+  // container/codec agreement: webm cannot carry H.264/AAC, mp4 cannot VP9/Opus
+  assert.strictEqual(typeof mainMod.fixupContainerCodecs, 'function');
+  let cc = mainMod.fixupContainerCodecs(
+    ['-i', '{input}', '-c:v', 'libx264', '-c:a', 'aac', '{output}'], 'convert to webm'
+  );
+  assert.deepStrictEqual(cc.args, ['-i', '{input}', '-c:v', 'libvpx-vp9', '-c:a', 'libopus', '{output}']);
+  cc = mainMod.fixupContainerCodecs(
+    ['-i', '{input}', '-c:v', 'libvpx-vp9', '-c:a', 'libopus', '{output}'], 'convert to mp4'
+  );
+  assert.deepStrictEqual(cc.args, ['-i', '{input}', '-c:v', 'libx264', '-c:a', 'aac', '{output}']);
+  assert.strictEqual(cc.corrections.length, 2);
   console.log('[smoke] fixupCodecs OK');
 
   // seek hygiene: repeated seeks collapse (ffmpeg honors one), provable
@@ -166,10 +193,10 @@ async function main() {
   assert.strictEqual(fixupsMod.fixupDedupeSeek, mainMod.fixupDedupeSeek, 'fixups must be the same functions main re-exports');
   assert.strictEqual(fixupsMod.fixupNoopSeek, mainMod.fixupNoopSeek, 'fixups must be the same functions main re-exports');
   let dq = mainMod.fixupDedupeSeek(['-i', 'in.mp4', '-ss', '27.5', '-ss', '2', '-t', '5', 'out.mp4']);
-  assert.deepStrictEqual(dq.args, ['-i', 'in.mp4', '-ss', '27.5', '-t', '5', 'out.mp4']);
+  assert.deepStrictEqual(dq.args, ['-i', 'in.mp4', '-ss', '2', '-t', '5', 'out.mp4'], 'ffmpeg honors the last -ss');
   assert.strictEqual(dq.corrections.length, 1, 'must report the dropped duplicate');
   dq = mainMod.fixupDedupeSeek(['-i', 'in.mp4', '-ss', '5', '-t', '5', '-t', '9', 'out.mp4']);
-  assert.deepStrictEqual(dq.args, ['-i', 'in.mp4', '-ss', '5', '-t', '5', 'out.mp4']);
+  assert.deepStrictEqual(dq.args, ['-i', 'in.mp4', '-ss', '5', '-t', '9', 'out.mp4'], 'ffmpeg honors the last -t');
   dq = mainMod.fixupDedupeSeek(['-i', 'in.mp4', '-ss', '5', 'out.mp4']);
   assert.deepStrictEqual(dq.args, ['-i', 'in.mp4', '-ss', '5', 'out.mp4']);
   assert.strictEqual(dq.corrections.length, 0, 'single seeks untouched');
@@ -179,10 +206,10 @@ async function main() {
   // trim intent owns the window: no stripping, even of 0-ish values.
   nq = mainMod.fixupNoopSeek(['-i', 'in.mp4', '-ss', '0', '-t', '5', 'out.mp4'], 'keep the first 5 seconds', 30);
   assert.deepStrictEqual(nq.args, ['-i', 'in.mp4', '-ss', '0', '-t', '5', 'out.mp4']);
-  // slowed output makes a full-duration -t a truncation, not a no-op.
+  // under slow motion a source-length -t would truncate the stretched output.
   nq = mainMod.fixupNoopSeek(['-i', 'in.mp4', '-ss', '0', '-t', '60', 'out.mp4'], 'slow motion', 60);
-  assert.deepStrictEqual(nq.args, ['-i', 'in.mp4', '-t', '60', 'out.mp4']);
-  assert.strictEqual(nq.corrections.length, 1, 'only the -ss 0 goes');
+  assert.deepStrictEqual(nq.args, ['-i', 'in.mp4', 'out.mp4']);
+  assert.strictEqual(nq.corrections.length, 2, 'both no-ops go, including under speed');
   nq = mainMod.fixupNoopSeek(['-i', 'in.mp4', '-t', '25', 'out.mp4'], 'convert to mp4', 30);
   assert.deepStrictEqual(nq.args, ['-i', 'in.mp4', '-t', '25', 'out.mp4'], 'partial -t untouched');
   console.log('[smoke] seek hygiene OK');
@@ -201,6 +228,10 @@ async function main() {
   assert.strictEqual(fi.corrections.length, 0);
   fi = mainMod.fixupInput(['-c:v', 'libx264', '{output}']);
   assert.deepStrictEqual(fi.args, ['-i', '{input}', '-c:v', 'libx264', '{output}'], 'missing -i inserted');
+  fi = mainMod.fixupInput(['-i', 'a.mp4', '-vf', 'hflip', '-i', 'b.mp4', '{output}']);
+  assert.deepStrictEqual(fi.args, ['-i', '{input}', '-vf', 'hflip', '{output}'], 'one input only');
+  fi = mainMod.fixupInput(['-i', '-c:v', 'libx264', '{output}']);
+  assert.deepStrictEqual(fi.args, ['-i', '{input}', '-c:v', 'libx264', '{output}'], 'dangling input replaced');
   // "trim the last N seconds" = CUT them (removal): keep [0, D-N]
   assert.strictEqual(typeof mainMod.fixupLastTrim, 'function');
   assert.strictEqual(typeof mainMod.probeMedia, 'function');
@@ -336,6 +367,13 @@ async function main() {
   assert.deepStrictEqual(mainMod.parseTrimIntent('the last 5 seconds'), { kind: 'last-keep', n: 5, raw: '5' });
   assert.deepStrictEqual(mainMod.parseTrimIntent('keep the middle 5 seconds'), { kind: 'middle', n: 5, raw: '5' });
   assert.deepStrictEqual(mainMod.parseTrimIntent('keep the middle 5 seconds and trim the last 2 seconds'), { kind: 'middle', n: 5, raw: '5' });
+  assert.deepStrictEqual(mainMod.parseTrimIntent('remove the middle 2 seconds'), { kind: 'middle-remove', n: 2, raw: '2' });
+  assert.deepStrictEqual(mainMod.parseTrimIntent('keep the last 5 seconds without audio'), { kind: 'last-keep', n: 5, raw: '5' });
+  assert.deepStrictEqual(mainMod.parseTrimIntent('keep everything except the last 5 seconds'), { kind: 'last-remove', n: 5, raw: '5' });
+  assert.deepStrictEqual(mainMod.parseTrimIntent('trim it to the first 5 seconds'), { kind: 'first-keep', n: 5, raw: '5' });
+  assert.deepStrictEqual(mainMod.parseTrimIntent('keep everything except the first 5 seconds'), { kind: 'first-remove', n: 5, raw: '5' });
+  assert.deepStrictEqual(mainMod.parseTrimIntent('convert from 24 to 30 fps'), { kind: 'none', n: 0, raw: '' });
+  assert.deepStrictEqual(mainMod.parseTrimIntent('keep it under 5 to 10 Mbps'), { kind: 'none', n: 0, raw: '' });
   assert.deepStrictEqual(mainMod.parseTrimIntent('convert to mp4'), { kind: 'none', n: 0, raw: '' });
   assert.ok(mainMod.trimNeedsDuration('last-remove') && mainMod.trimNeedsDuration('last-keep') && mainMod.trimNeedsDuration('middle'));
   assert.ok(!mainMod.trimNeedsDuration('none'), 'gateless kinds need no duration');
@@ -397,12 +435,20 @@ async function main() {
   assert.strictEqual(mainMod.parseSpeedFactor('Speed up 2x'), 2);
   assert.strictEqual(mainMod.parseSpeedFactor('half speed please'), 0.5);
   assert.strictEqual(mainMod.parseSpeedFactor('slow it down'), 0.5);
+  assert.strictEqual(mainMod.parseSpeedFactor('2x slower'), 0.5);
+  assert.strictEqual(mainMod.parseSpeedFactor('slow motion 2x'), 0.5);
+  assert.strictEqual(mainMod.parseSpeedFactor('slow down by 2x'), 0.5);
+  assert.strictEqual(mainMod.parseSpeedFactor('slow down to 0.25x'), 0.25);
+  assert.strictEqual(mainMod.parseSpeedFactor('50% speed'), 0.5);
   assert.strictEqual(mainMod.parseSpeedFactor('convert to mp4'), null);
   assert.strictEqual(fixupsMod.atempoChain(4), 'atempo=2,atempo=2');
   assert.strictEqual(fixupsMod.atempoChain(0.25), 'atempo=0.5,atempo=0.5');
   assert.strictEqual(fixupsMod.atempoChain(1.5), 'atempo=1.5');
   let sp = mainMod.fixupSpeed(['-i', 'in.mp4', '-vf', 'setpts=0.5*PTS', 'out.mp4'], 'Speed up 2x');
   assert.deepStrictEqual(sp.args, ['-i', 'in.mp4', '-vf', 'setpts=0.5*PTS', '-af', 'atempo=2', 'out.mp4']);
+  // non-integer video factors use an exact PTS division and a chained atempo
+  sp = mainMod.fixupSpeed(['-i', 'in.mp4', 'out.mp4'], 'Speed up 3x');
+  assert.deepStrictEqual(sp.args, ['-i', 'in.mp4', '-vf', 'setpts=PTS/3', '-af', 'atempo=2,atempo=1.5', 'out.mp4']);
   // model setpts alone still gets matched audio (factor read from the args)
   sp = mainMod.fixupSpeed(['-i', 'in.mp4', '-vf', 'setpts=2*PTS', 'out.mp4'], 'slow motion');
   assert.deepStrictEqual(sp.args, ['-i', 'in.mp4', '-vf', 'setpts=2*PTS', '-af', 'atempo=0.5', 'out.mp4']);
@@ -423,16 +469,22 @@ async function main() {
   assert.deepStrictEqual(fp.args, ['-i', 'in.mp4', '-c:v', 'libx264', '-vf', 'fps=30', 'out.mp4']);
   fp = mainMod.fixupFps(['-i', 'in.mp4', '-vf', 'scale=-2:720,fps=60', 'out.mp4'], 'cap at 30fps');
   assert.deepStrictEqual(fp.args, ['-i', 'in.mp4', '-vf', 'scale=-2:720,fps=30', 'out.mp4']);
+  fp = mainMod.fixupFps(['-i', 'in.mp4', '-r', '60', 'out.mp4'], 'cap at 30fps');
+  assert.ok(!fp.args.includes('-r') && fp.args.includes('fps=30'), '-r must not override the fps filter');
   // width: evened, replaces other scales
   assert.strictEqual(mainMod.parseWidth('make it 640 wide'), 640);
   assert.strictEqual(mainMod.parseWidth('make it 641 wide'), 640, 'odd width evens down');
   assert.strictEqual(mainMod.parseWidth('make it 720p'), null, 'heights are not widths');
   let wd = mainMod.fixupWidthScale(['-i', 'in.mp4', '-vf', 'scale=-2:720', 'out.mp4'], 'make it 640 wide');
   assert.deepStrictEqual(wd.args, ['-i', 'in.mp4', '-vf', 'scale=640:-2', 'out.mp4']);
+  wd = mainMod.fixupWidthScale(['-i', 'in.mp4', '-s', '1280x720', 'out.mp4'], 'make it 640 wide');
+  assert.ok(!wd.args.includes('-s') && wd.args.includes('scale=640:-2'), '-s must not override the scale filter');
   // rotate / flip
   assert.strictEqual(mainMod.parseRotate('rotate 90 degrees clockwise'), 'transpose=1');
   assert.strictEqual(mainMod.parseRotate('rotate 90 counterclockwise'), 'transpose=2');
   assert.strictEqual(mainMod.parseRotate('rotate 180'), 'transpose=2,transpose=2');
+  assert.strictEqual(mainMod.parseRotate('rotate it 180'), 'transpose=2,transpose=2');
+  assert.strictEqual(mainMod.parseRotate('rotate the video 90'), 'transpose=1');
   assert.strictEqual(mainMod.parseRotate('flip horizontal'), 'hflip');
   assert.strictEqual(mainMod.parseRotate('convert to mp4'), null);
   let rt = mainMod.fixupRotate(['-i', 'in.mp4', '-vf', 'scale=-2:720', 'out.mp4'], 'rotate 90 degrees');
@@ -467,6 +519,9 @@ async function main() {
   assert.strictEqual(typeof mainMod.fixupVolume, 'function');
   assert.strictEqual(fixupsMod.fixupVolume, mainMod.fixupVolume, 'fixups must be the same functions main re-exports');
   assert.strictEqual(mainMod.parseVolume('boost the volume'), 1.5);
+  assert.strictEqual(mainMod.parseVolume('boost volume by 50%'), 1.5);
+  assert.strictEqual(mainMod.parseVolume('reduce volume by 50%'), 0.5);
+  assert.strictEqual(mainMod.parseVolume('make it 50% smaller'), null, 'file size is not volume');
   assert.strictEqual(mainMod.parseVolume('make it quieter'), 0.5);
   assert.strictEqual(mainMod.parseVolume('volume at 150%'), 1.5);
   assert.strictEqual(mainMod.parseVolume('convert to mp4'), null);
@@ -474,6 +529,8 @@ async function main() {
   assert.deepStrictEqual(vl.args, ['-i', 'in.mp4', '-c:v', 'libx264', '-c:a', 'aac', '-af', 'volume=1.5', 'out.mp4']);
   vl = mainMod.fixupVolume(['-i', 'in.mp4', '-an', 'out.mp4'], 'boost the volume');
   assert.deepStrictEqual(vl.args, ['-i', 'in.mp4', '-an', 'out.mp4'], 'muted volume stays muted');
+  vl = mainMod.fixupVolume(['-i', 'in.mp4', '-c:a', 'copy', 'out.mp4'], 'boost volume by 50%');
+  assert.ok(vl.args.includes('aac') && !vl.args.includes('copy'), 'copied audio cannot be filtered');
   // gif: defaults filled, audio stripped to -an
   assert.strictEqual(typeof mainMod.fixupGif, 'function');
   let gf = mainMod.fixupGif(['-i', 'in.mp4', '-c:v', 'libx264', 'out.gif'], 'convert to gif');
@@ -485,10 +542,16 @@ async function main() {
   assert.ok(!gf.args.includes('-c:v') && !gf.args.includes('libx264'), 'gif uses its default encoder');
   gf = mainMod.fixupGif(['-i', 'in.mp4', 'out.mp4'], 'convert to mp4');
   assert.deepStrictEqual(gf.args, ['-i', 'in.mp4', 'out.mp4'], 'non-gif untouched');
+  gf = mainMod.fixupGif(['-i', 'in.gif', '-c', 'copy', 'out.mp4'], 'convert gif to mp4');
+  assert.deepStrictEqual(gf.args, ['-i', 'in.gif', '-c', 'copy', 'out.mp4'], 'target wins over the source word');
   // thumbnail: time, frame, no bitrate (container comes from
   // inferOutputExt - the token itself is never rewritten)
   assert.strictEqual(typeof mainMod.fixupThumbnail, 'function');
   assert.strictEqual(mainMod.parseThumbTime('thumbnail at 10 seconds', 60), '10');
+  assert.strictEqual(mainMod.parseThumbTime('thumbnail at the 10 second mark', 60), '10');
+  assert.strictEqual(mainMod.parseThumbTime('thumbnail 10 seconds in', 60), '10');
+  assert.strictEqual(mainMod.parseThumbTime('thumbnail at 25%', 60), '15');
+  assert.strictEqual(mainMod.parseThumbTime('thumbnail 10s', 60), '10');
   assert.strictEqual(mainMod.parseThumbTime('thumbnail', 60), '30', 'bare thumbnail uses the middle');
   let   th = mainMod.fixupThumbnail(['-i', 'in.mp4', '-c:v', 'libx264', '{output}'], 'thumbnail at 10 seconds', 60);
   assert.deepStrictEqual(th.args, ['-i', 'in.mp4', '-ss', '10', '-frames:v', '1', '{output}']);
@@ -497,6 +560,8 @@ async function main() {
   // an explicit video codec would corrupt the still - the container decides
   th = mainMod.fixupThumbnail(['-i', 'in.mp4', '-c:v', 'libx264', '{output}'], 'thumbnail at 10 seconds', 60);
   assert.deepStrictEqual(th.args, ['-i', 'in.mp4', '-ss', '10', '-frames:v', '1', '{output}']);
+  th = mainMod.fixupThumbnail(['-i', 'in.mp4', '-c', 'copy', '{output}'], 'thumbnail at 10 seconds', 60);
+  assert.ok(!th.args.includes('copy'), 'bare -c copy cannot write a still');
   th = mainMod.fixupThumbnail(['-i', 'in.mp4', '{output}'], 'convert to mp4', 60);
   assert.deepStrictEqual(th.args, ['-i', 'in.mp4', '{output}'], 'non-thumbnail untouched');
   // truncated answer ending on -frames:v: the appended token is not its value
@@ -528,6 +593,16 @@ async function main() {
   assert.ok(cf.args.includes('libx264') && !cf.args.includes('copy'), 'trim+copy must re-encode');
   cf = mainMod.fixupConflicts(['-i', 'in.mp4', '-c:v', 'copy', 'out.mp4'], 'keep the last 5 seconds without re-encoding');
   assert.ok(cf.args.includes('copy'), 'explicit remux keeps copy even with a trim');
+  // bare -c copy covers both streams and must not survive filtering/trims
+  cf = mainMod.fixupConflicts(['-i', 'in.mp4', '-c', 'copy', '-vf', 'scale=-2:360', 'out.mp4'], 'resize it');
+  assert.ok(cf.args.includes('-c:v') && cf.args.includes('libx264') && !cf.args.includes('copy'), 'bare copy + filter re-encodes');
+  cf = mainMod.fixupConflicts(['-i', 'in.mp4', '-c', 'copy', 'out.mp4'], 'keep the last 5 seconds');
+  assert.ok(cf.args.includes('-c:v') && !cf.args.includes('copy'), 'bare copy + trim re-encodes');
+  cf = mainMod.fixupConflicts(['-i', 'in.mp4', '-c', 'copy', 'out.mp4'], 'keep the last 5 seconds without re-encoding');
+  assert.ok(cf.args.includes('copy'), 'explicit remux keeps bare copy');
+  // audio filters cannot run on copied audio
+  cf = mainMod.fixupConflicts(['-i', 'in.mp4', '-c:a', 'copy', '-af', 'volume=1.5', 'out.mp4'], 'boost volume');
+  assert.ok(cf.args.includes('aac') && !cf.args.includes('copy'), 'copied audio + audio filter re-encodes');
   // output-dir fixup is gone with templated outputs (nothing has a
   // directory until the runner resolves the tokens).
   assert.strictEqual(mainMod.fixupOutputDir, undefined, 'output-dir fixup must be removed');
@@ -542,6 +617,9 @@ async function main() {
   assert.strictEqual(mainMod.inferOutputExt([], 'extract the audio as mp3'), '.mp3');
   assert.strictEqual(mainMod.inferOutputExt([], 'thumbnail at 10 seconds'), '.png');
   assert.strictEqual(mainMod.inferOutputExt([], 'thumbnail as jpg'), '.jpg');
+  assert.strictEqual(mainMod.inferOutputExt([], 'screenshot at 5 seconds'), '.png');
+  assert.strictEqual(mainMod.inferOutputExt([], 'convert mkv to mp4'), '.mp4', 'target wins over source word');
+  assert.strictEqual(mainMod.inferOutputExt([], 'convert gif to mp4'), '.mp4', 'gif source is not a gif target');
   assert.strictEqual(mainMod.inferOutputExt([], 'convert it'), '.mp4');
   assert.strictEqual(mainMod.inferOutputExt(['-c:v', 'libvpx-vp9'], 'convert it'), '.webm', 'codec hints still apply');
   // run-time substitution of both tokens with the run's real paths.
@@ -567,6 +645,22 @@ async function main() {
   assert.ok(!pr.includes('-pass') && !pr.includes('1'), 'no orphan pass value: ' + pr.join(' '));
   assert.ok(pr.includes('-an') && pr[pr.length - 1] === '{output}', 'mute intact, output token kept');
   assert.strictEqual(pr[pr.indexOf('-b:v') + 1], '6850k', 'size cap value stays paired with its flag');
+  // Unsafe requests fail loudly instead of producing a silently wrong cut.
+  let unsupported = mainMod.runTranslationPipeline(
+    ['-i', '{input}', '-ss', '0', '-t', '5', '{output}'],
+    { instruction: 'remove the middle 5 seconds', duration: 60 }
+  );
+  assert.ok(/not a single contiguous cut/.test(unsupported.error || ''), 'middle-remove must be refused');
+  let graphConflict = mainMod.runTranslationPipeline(
+    ['-i', '{input}', '-filter_complex', '[0:v]hflip[v]', '-map', '[v]', '{output}'],
+    { instruction: 'speed up 2x', duration: 60 }
+  );
+  assert.ok(/simple -vf\/-af filter/.test(graphConflict.error || ''), 'filter_complex conflicts must be refused');
+  graphConflict = mainMod.runTranslationPipeline(
+    ['-i', '{input}', '-filter_complex', '[0:v]hflip[v]', '-map', '[v]', '{output}'],
+    { instruction: 'convert to mp4', duration: 60 }
+  );
+  assert.strictEqual(graphConflict.error, undefined, 'unrelated filter graphs stay usable');
   // size limits: parsing, math, and single-pass enforcement
   assert.strictEqual(typeof mainMod.parseSizeLimit, 'function');
   assert.strictEqual(typeof mainMod.fixupSizeLimit, 'function');
@@ -593,6 +687,16 @@ async function main() {
   // -an respected: no audio flags injected
   sz = mainMod.fixupSizeLimit(['-i', 'in.mp4', '-c:v', 'libvpx-vp9', '-an', 'out.webm'], 'below 50MB', 60);
   assert.ok(!sz.args.includes('-b:a') && sz.args.includes('-an'), 'muted output stays muted');
+  // copied video cannot be capped: the size layer re-encodes it
+  sz = mainMod.fixupSizeLimit(['-i', 'in.mp4', '-c:v', 'copy', 'out.mp4'], 'below 50MB', 60);
+  assert.ok(sz.args.includes('libx264') && !sz.args.includes('copy'), 'copied video is re-encoded for the cap');
+  sz = mainMod.fixupSizeLimit(['-i', 'in.mp4', '-c', 'copy', 'out.mp4'], 'below 50MB', 60);
+  assert.ok(sz.args.includes('libx264') && !sz.args.includes('copy'), 'bare copy is re-encoded for the cap');
+  // audio-only output has no video stream to cap: bound audio instead
+  sz = mainMod.fixupSizeLimit(['-i', 'in.mp4', '-vn', 'out.mp3'], 'below 5MB', 60);
+  assert.ok(!sz.args.includes('-b:v') && sz.args.includes('-b:a'), 'audio-only cap uses -b:a');
+  sz = mainMod.fixupSizeLimit(['-i', 'in.mp4', '-vn', '-c', 'copy', 'out.mp3'], 'below 5MB', 60);
+  assert.ok(!sz.args.includes('-c') && !sz.args.includes('copy') && sz.args.includes('libmp3lame'), 'copied audio-only must re-encode');
   // oversized -b:a is capped so the limit stays a guarantee
   sz = mainMod.fixupSizeLimit(['-i', 'in.mp4', '-c:v', 'libx264', '-b:a', '320k', 'out.mp4'], 'below 50MB', 60);
   assert.ok(sz.args.includes('128k') && !sz.args.includes('320k'), 'audio bitrate must be bounded under a size limit');
